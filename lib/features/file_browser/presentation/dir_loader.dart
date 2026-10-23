@@ -247,13 +247,15 @@ Future<List<Directory>> listSubdirectoriesSafe(String path) async {
     return _storageRootDirs();
   }
   try {
-    final raw = await Directory(path).list(followLinks: false).toList();
-    return raw.whereType<Directory>().where((d) {
-      final name = d.path.split('/').last;
-      return !name.startsWith('.');
-    }).toList()
-      ..sort((a, b) =>
-          a.path.toLowerCase().compareTo(b.path.toLowerCase()));
+    final dirs = <Directory>[];
+    await for (final entry in Directory(path).list(followLinks: false)) {
+      if (entry is Directory) {
+        final name = entry.path.split('/').last;
+        if (!name.startsWith('.')) dirs.add(entry);
+      }
+    }
+    dirs.sort((a, b) => a.path.toLowerCase().compareTo(b.path.toLowerCase()));
+    return dirs;
   } catch (_) {
     return const [];
   }
