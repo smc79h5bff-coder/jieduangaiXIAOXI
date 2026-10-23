@@ -571,6 +571,55 @@ void jumpToNextDiff() {
   _jumpToBlockAnimated(target);
 }
 
+  /// 跳过下一处"独有块"（纯新增块或纯删除块）。
+  ///
+  /// 独有块判定：kind == different 且只有一侧有内容
+  ///   · leftLength == 0 && rightLength > 0  → 纯新增块
+  ///   · leftLength > 0 && rightLength == 0  → 纯删除块
+  /// 混合块（两边都有）不算独有块，跳过它继续找。
+  ///
+  /// 从当前块开始找（含当前块）：用户刚用 ↓ 落在一个 200 行纯删块上
+  /// 再按 ⏭，要跳的是"这个块之后"，而不是再往下的下一个独有块。
+  /// 找到独有块后，把紧邻的独有块一起跳过（大块拆分会产生
+  /// 相邻的纯删/纯增尾段），一次落到非独有块上。
+  ///
+  /// 返回：
+  ///   · true  = 跳转成功
+  ///   · false = 后面没有独有块了 / 视图未就绪
+  bool jumpOverPureBlock() {
+    if (!mounted) return false;
+    final visible = _visible;
+    if (visible == null || !_leftCtrl.hasClients) return false;
+
+    final cur = _currentBlockIdx();
+    if (cur == null) return false;
+
+    // 从当前块开始（含当前），找到第一个独有块
+    for (var i = cur; i < visible.length; i++) {
+      final b = visible[i];
+      if (b.kind != GroupedBlockKind.different) continue;
+      if (b.leftLength > 0 && b.rightLength > 0) continue; // 混合块
+      if (b.leftLength == 0 && b.rightLength == 0) continue; // 空块
+
+      // 找到独有块 i，跳过所有连续的独有块
+      var j = i + 1;
+      while (j < visible.length) {
+        final nb = visible[j];
+        if (nb.kind != GroupedBlockKind.different) break;
+        if (nb.leftLength > 0 && nb.rightLength > 0) break;
+        if (nb.leftLength == 0 && nb.rightLength == 0) break;
+        j++;
+      }
+
+      if (j >= visible.length) return false;
+
+      setState(() => _jumpedBlockIdx = j);
+      _jumpToBlockAnimated(j);
+      return true;
+    }
+    return false;
+  }
+
 
   
 
