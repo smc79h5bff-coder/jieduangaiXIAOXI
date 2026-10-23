@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -21,6 +23,17 @@ const double _kBlockOffset = 37.0;
 const double _kBlockAreaWidth = 76.0;
 
 const double _kGutterWidth = 45.0;
+
+/// 文本编辑区最大可视宽度：16000px ≈ 2000 个中文字。
+/// 超过这个宽度，TextField 会折行（GPU 纹理上限约 16384px，
+/// 再往上是真的会闪退）。这个上限保证：
+///   · 最长行 ≤ 2000 中文字 → 不折行，横向滚动能看全
+///   · 最长行 > 2000 中文字 → 折行显示（用户只看前几十个字，
+///                              所以这个场景几乎不会触发）
+const double _kMaxEditorWidth = 16000.0;
+
+/// 打字时用估算，停手 400ms 后用精确测量修正宽度。
+const Duration _kWidthRecalcDelay = Duration(milliseconds: 400);
 
 const Color _kSelectedBg = Color(0xFFDCFFFF);
 const Color _kCheckColor = Color(0xFF00ABFF);
@@ -51,6 +64,11 @@ class _LineListPageState extends ConsumerState<LineListPage> {
   double? _cachedMaxLineWidth;
   String? _cachedMaxLineWidthForText;
 
+  // ★ 编辑模式 / 防抖 / 长按连续退格
+  bool _editMode = false;
+  Timer? _widthRecalcTimer;
+  Timer? _backspaceRepeatTimer;
+
   @override
   void initState() {
     super.initState();
@@ -63,6 +81,8 @@ class _LineListPageState extends ConsumerState<LineListPage> {
 
   @override
   void dispose() {
+    _widthRecalcTimer?.cancel();
+    _backspaceRepeatTimer?.cancel();
     _textCtrl.removeListener(_onControllerChanged);
     _vertCtrl.removeListener(_onScroll);
     _textCtrl.dispose();
@@ -86,6 +106,12 @@ class _LineListPageState extends ConsumerState<LineListPage> {
         needRebuild = true;
       }
       needRebuild = true;
+
+      // ★ 停手 400ms 后精确测量修正宽度（编辑模式下宽度已锁定，跳过）
+      if (!_editMode) {
+        _widthRecalcTimer?.cancel();
+        _widthRecalcTimer = Timer(_kWidthRecalcDelay, _preciseRecalcWidth);
+      }
     } else {
       if (_selectedLines.isNotEmpty) {
         _selectedLines.clear();
@@ -95,6 +121,23 @@ class _LineListPageState extends ConsumerState<LineListPage> {
     }
 
     if (needRebuild && mounted) setState(() {});
+  }
+
+  /// 精确测量宽度。只在比当前估算值明显大时才 setState，
+  /// 避免"测量值和估算值差不多"时引发无谓重绘。
+  void _preciseRecalcWidth() {
+    if (!mounted) return;
+    final scaler = MediaQuery.textScalerOf(context);
+    final precise = _measureExactMaxWidth(_lines, scaler);
+    final current = _cachedMaxLineWidth ?? 0.0;
+    // 只有精确值比估算值大 5px 以上才更新
+    // （估算值通常大于精确值，少数情况会小，这时才需要修正）
+    if (precise > current + 5) {
+      setState(() {
+        _cachedMaxLineWidth = precise;
+        _cachedMaxLineWidthForText = _textCtrl.text;
+      });
+    }
   }
 
   void _onScroll() {
@@ -574,9 +617,8 @@ class _LineListPageState extends ConsumerState<LineListPage> {
           fontFamily: 'monospace',
         );
 
-        // ★ 只在文本变化时按字符数估算必够宽，其余时间用缓存。
-        //   不再用 TextPainter 精确测量：测量值只要差 1px 最宽行就会
-        //   折行，行号/色块跟着错位。改为按字符宽度上限估算，只多不少。
+        // ★ 宽度先按字符数估算（只多不少），打字时只走估算不卡顿；
+        //   停手 400ms 后会精确测量，仅当估算不够时才补宽。
         final text = _textCtrl.text;
         if (_cachedMaxLineWidthForText != text) {
           final scaler = MediaQuery.textScalerOf(context);
@@ -584,10 +626,16 @@ class _LineListPageState extends ConsumerState<LineListPage> {
           _cachedMaxLineWidthForText = text;
         }
         final maxW = _cachedMaxLineWidth ?? 0.0;
-        // +16 给 TextField 内部留一点余量，保证一定不折行。
-        final needW = maxW + 16;
+
+        // ★ 关键改动：
+        //   1. 安全余量 16 → 50（覆盖 cursor 2px + padding 5px + 容错 43px）
+        //   2. 加 _kMaxEditorWidth 硬上限（16000px），防止超长行把宽度
+        //      推到几十万px 导致 GPU 纹理溢出闪退
+        const safety = 50.0;
+        final needW = maxW + safety;
+        final targetW = needW < _kMaxEditorWidth ? needW : _kMaxEditorWidth;
         final width =
-            needW > constraints.maxWidth ? needW : constraints.maxWidth;
+            targetW > constraints.maxWidth ? targetW : constraints.maxWidth;
 
         return SingleChildScrollView(
           scrollDirection: Axis.horizontal,
@@ -658,6 +706,64 @@ class _LineListPageState extends ConsumerState<LineListPage> {
           w += wideW;
         }
       }
+      if (w > maxW) maxW = w;
+    }
+    return maxW;
+  }
+
+  /// 精确测量：每行文本在"无约束"下的自然宽度，取最大值。
+  ///
+  /// 三道防护保证不会卡死：
+  ///   1. 单行最多测前 3000 字符（其余按比例外推），
+  ///      避免"单行 100 万字符"触发 O(N²) 布局
+  ///   2. 总时间预算 100ms，超时降级到估算
+  ///   3. 空行跳过
+  double _measureExactMaxWidth(List<String> lines, TextScaler scaler) {
+    const maxMeasureChars = 3000;
+    const budgetMs = 100;
+    final sw = Stopwatch()..start();
+
+    final tp = TextPainter(
+      textDirection: TextDirection.ltr,
+      textScaler: scaler,
+      strutStyle: const StrutStyle(
+        fontSize: _kFontSize,
+        height: _kLineHeight / _kFontSize,
+        forceStrutHeight: true,
+      ),
+    );
+
+    var maxW = 0.0;
+    for (final line in lines) {
+      if (line.isEmpty) continue;
+
+      // 超时降级：剩下的用估算值兜底
+      if (sw.elapsedMilliseconds > budgetMs) {
+        final est = _estimateSafeWidth(lines, scaler);
+        return maxW > est ? maxW : est;
+      }
+
+      final len = line.length;
+      final sample = len > maxMeasureChars
+          ? line.substring(0, maxMeasureChars)
+          : line;
+
+      tp.text = TextSpan(
+        text: sample,
+        style: const TextStyle(
+          fontSize: _kFontSize,
+          fontFamily: 'monospace',
+        ),
+      );
+      // ★ 关键：maxWidth: infinity 让 TextPainter 算"文字自然宽度"，
+      //         不受容器约束。这是之前"TextPainter 测量失败"的根因——
+      //         用 constraints.maxWidth 会受约束，测不出真实需要多宽。
+      tp.layout(maxWidth: double.infinity);
+
+      final w = sample.length == len
+          ? tp.width
+          : tp.width * (len / sample.length);
+
       if (w > maxW) maxW = w;
     }
     return maxW;
