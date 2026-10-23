@@ -59,10 +59,8 @@ class AppTheme {
 
       // 所有 SnackBar 改成悬浮卡片：
       // - floating 内部自带 Dismissible，左右滑可立即划走
-      // - 默认 duration 2s，够读；长提示在调用点传更长即可覆盖
       snackBarTheme: const SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
-        duration: Duration(milliseconds: 2000),
       ),
 
       textTheme: base.textTheme.apply(
@@ -99,10 +97,9 @@ class AppTheme {
         displayColor: const Color(0xFFE0E0E0),
       ),
 
-      // 同 light()：悬浮 SnackBar，2s 默认
+      // 同 light()：悬浮 SnackBar
       snackBarTheme: const SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
-        duration: Duration(milliseconds: 2000),
       ),
     );
   }
