@@ -2708,29 +2708,7 @@ toolbarHeight: 43,
   ),
   titleSpacing: 0,
         actions: [
-          // ===== 左侧组：批左 + 删左 =====
-          InkWell(
-            key: const Key('prev-diff'),
-            onTap: () => _openLineListFromDiff(isLeft: true),
-            onLongPress: () {
-              if (viewMode == ViewMode.grouped) {
-                (_groupedKey.currentState as dynamic)?.jumpToTop();
-              } else {
-                _jumpToDocTop();
-              }
-            },
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              child: CustomPaint(
-                size: const Size(37, 26),
-                painter: _BatchExtractIconPainter(
-                  pointLeft: true,
-                  color: IconTheme.of(context).color ??
-                      Theme.of(context).colorScheme.onSurface,
-                ),
-              ),
-            ),
-          ),
+          // ===== 左侧组：删左 + 批左 =====
           Builder(builder: (ctx) {
             final enabled = !_originalDeleted &&
                 ref.read(originalFilePathProvider) != null;
@@ -2753,6 +2731,28 @@ toolbarHeight: 43,
               ),
             );
           }),
+          InkWell(
+            key: const Key('prev-diff'),
+            onTap: () => _openLineListFromDiff(isLeft: true),
+            onLongPress: () {
+              if (viewMode == ViewMode.grouped) {
+                (_groupedKey.currentState as dynamic)?.jumpToTop();
+              } else {
+                _jumpToDocTop();
+              }
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: CustomPaint(
+                size: const Size(37, 26),
+                painter: _BatchExtractIconPainter(
+                  pointLeft: true,
+                  color: IconTheme.of(context).color ??
+                      Theme.of(context).colorScheme.onSurface,
+                ),
+              ),
+            ),
+          ),
 
           // ===== 分组竖线 =====
           Padding(
