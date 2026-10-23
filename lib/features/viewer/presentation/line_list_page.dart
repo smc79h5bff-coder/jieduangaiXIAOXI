@@ -140,6 +140,80 @@ class _LineListPageState extends ConsumerState<LineListPage> {
     }
   }
 
+  /// 切换编辑模式。
+  ///   · 进入：立即切（宽度用当前估算，够用；编辑中打字不重测）
+  ///   · 退出：切完停手 400ms 精确测一次，修正宽度
+  void _toggleEditMode() {
+    if (_editMode) {
+      FocusScope.of(context).unfocus();
+      setState(() => _editMode = false);
+      _widthRecalcTimer?.cancel();
+      _widthRecalcTimer = Timer(_kWidthRecalcDelay, _preciseRecalcWidth);
+    } else {
+      setState(() => _editMode = true);
+    }
+  }
+
+  /// 退格：删除选中范围，或光标前一个字符。
+  void _deleteCharBeforeCursor() {
+    final text = _textCtrl.text;
+    if (text.isEmpty) return;
+
+    // 还没在正文里点过位置时没有有效光标，默认从末尾开始删
+    if (!_textCtrl.selection.isValid) {
+      _textCtrl.selection = TextSelection.collapsed(offset: text.length);
+    }
+
+    final sel = _textCtrl.selection;
+    int start;
+    int end;
+    if (sel.isValid && !sel.isCollapsed) {
+      start = sel.start;
+      end = sel.end;
+    } else if (sel.isValid && sel.baseOffset > 0) {
+      final offset = sel.baseOffset;
+      // 处理 surrogate pair（emoji 等占 2 个 code unit）
+      var startOffset = offset - 1;
+      if (startOffset > 0) {
+        final code = text.codeUnitAt(startOffset);
+        if (code >= 0xDC00 && code <= 0xDFFF) {
+          final prev = text.codeUnitAt(startOffset - 1);
+          if (prev >= 0xD800 && prev <= 0xDBFF) {
+            startOffset -= 1;
+          }
+        }
+      }
+      start = startOffset;
+      end = offset;
+    } else {
+      return;
+    }
+
+    final newText = text.replaceRange(start, end, '');
+    _textCtrl.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: start),
+    );
+  }
+
+  /// 长按退格按钮：连续删除。
+  void _startRepeatBackspace() {
+    _deleteCharBeforeCursor();
+    _backspaceRepeatTimer?.cancel();
+    _backspaceRepeatTimer = Timer(const Duration(milliseconds: 400), () {
+      _backspaceRepeatTimer =
+          Timer.periodic(const Duration(milliseconds: 50), (_) {
+        if (!mounted) return;
+        _deleteCharBeforeCursor();
+      });
+    });
+  }
+
+  void _stopRepeatBackspace() {
+    _backspaceRepeatTimer?.cancel();
+    _backspaceRepeatTimer = null;
+  }
+
   void _onScroll() {
     if (mounted) setState(() {});
   }
@@ -416,20 +490,92 @@ class _LineListPageState extends ConsumerState<LineListPage> {
   }
 
   Widget _buildEditorArea() {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(1, 6, 1, 0),
-      decoration: BoxDecoration(
-        border: Border.all(color: Colors.grey.shade300),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _buildBlockArea(),
-          _buildGutter(),
-          Container(width: 1, color: Colors.grey.shade300),
-          Expanded(child: _buildTextField()),
-        ],
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: Container(
+            margin: const EdgeInsets.fromLTRB(1, 6, 1, 0),
+            decoration: BoxDecoration(
+              border: Border.all(color: Colors.grey.shade300),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                _buildBlockArea(),
+                _buildGutter(),
+                Container(width: 1, color: Colors.grey.shade300),
+                Expanded(child: _buildTextField()),
+              ],
+            ),
+          ),
+        ),
+        // ★ 右下角悬浮按钮：编辑 + 退格
+        Positioned(
+          right: 16,
+          bottom: 16,
+          child: _buildFloatingButtons(),
+        ),
+      ],
+    );
+  }
+
+  /// 右下角悬浮按钮组：编辑（上）+ 退格（下）。
+  Widget _buildFloatingButtons() {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        _buildFloatButton(
+          icon: _editMode ? Icons.check : Icons.edit,
+          tooltip: _editMode ? '完成编辑' : '编辑',
+          onTap: _toggleEditMode,
+        ),
+        const SizedBox(height: 12),
+        _buildFloatButton(
+          icon: Icons.backspace_outlined,
+          tooltip: '退格删除（长按连续删）',
+          onTapDown: _startRepeatBackspace,
+          onTapUp: _stopRepeatBackspace,
+          onTapCancel: _stopRepeatBackspace,
+        ),
+      ],
+    );
+  }
+
+  /// 半透明圆按钮：背景 50% 白，图标实色，边界清晰。
+  Widget _buildFloatButton({
+    required IconData icon,
+    required String tooltip,
+    VoidCallback? onTap,
+    VoidCallback? onTapDown,
+    VoidCallback? onTapUp,
+    VoidCallback? onTapCancel,
+  }) {
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        shape: CircleBorder(
+          side: BorderSide(
+            color: Colors.black.withValues(alpha: 0.15),
+            width: 1,
+          ),
+        ),
+        color: Colors.white.withValues(alpha: 0.5),
+        elevation: 2,
+        shadowColor: Colors.black.withValues(alpha: 0.2),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          onTapDown: onTapDown != null ? (_) => onTapDown() : null,
+          onTapUp: onTapUp != null ? (_) => onTapUp() : null,
+          onTapCancel: onTapCancel,
+          child: SizedBox(
+            width: 48,
+            height: 48,
+            child: Icon(icon, size: 22, color: Colors.black87),
+          ),
+        ),
       ),
     );
   }
@@ -621,8 +767,12 @@ class _LineListPageState extends ConsumerState<LineListPage> {
         //   停手 400ms 后会精确测量，仅当估算不够时才补宽。
         final text = _textCtrl.text;
         if (_cachedMaxLineWidthForText != text) {
-          final scaler = MediaQuery.textScalerOf(context);
-          _cachedMaxLineWidth = _estimateSafeWidth(_lines, scaler);
+          if (!_editMode) {
+            // 非编辑模式：打字立即用估算（1~5ms）
+            final scaler = MediaQuery.textScalerOf(context);
+            _cachedMaxLineWidth = _estimateSafeWidth(_lines, scaler);
+          }
+          // 编辑模式：宽度锁定，不重测
           _cachedMaxLineWidthForText = text;
         }
         final maxW = _cachedMaxLineWidth ?? 0.0;
@@ -656,6 +806,12 @@ class _LineListPageState extends ConsumerState<LineListPage> {
                     scrollController: _vertCtrl,
                     maxLines: null,
                     expands: true,
+                    // ★ 浏览模式只读（不弹键盘），编辑模式可写
+                    readOnly: !_editMode,
+                    // ★ 光标始终显示：用户能在浏览模式下点位置再按退格删
+                    showCursor: true,
+                    cursorColor: Colors.blue,
+                    cursorWidth: 2.0,
                     keyboardType: TextInputType.multiline,
                     textAlignVertical: TextAlignVertical.top,
                     style: style,
@@ -664,7 +820,6 @@ class _LineListPageState extends ConsumerState<LineListPage> {
                       height: _kLineHeight / _kFontSize,
                       forceStrutHeight: true,
                     ),
-                    cursorColor: Colors.blue,
                     decoration: const InputDecoration(
                       isDense: true,
                       border: InputBorder.none,
