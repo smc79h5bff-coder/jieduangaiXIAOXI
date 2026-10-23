@@ -1445,6 +1445,141 @@ if (!jumped) {
     _toast('到顶了');
   }
 
+  // ================ 跳过独有块 ================
+
+  /// 找出所有"独有块"（连续同类操作）的 [start, end) 范围。
+  ///
+  /// ★ 按"操作类型"拆块，不按 equal 边界拆：
+  ///   diff 引擎输出"删 200 行 + 加 50 行"通常是
+  ///   [delete×200][insert×50] 紧邻、中间没有 equal——
+  ///   如果按 equal 边界整块判断 hasDelete && hasInsert，
+  ///   这 250 行独有行会被当成混合块整体丢弃，按钮错误置灰。
+  ///   拆开后得到 {0,200} 和 {200,250} 两个纯块，都算独有行。
+  ///
+  /// replace（两边都有内容但变了）是"修改"语义，不形成独有块。
+  List<({int start, int end})> _findPureBlocks(DiffResult diff) {
+    final out = <({int start, int end})>[];
+    var i = 0;
+    while (i < diff.entries.length) {
+      final op = diff.entries[i].operation;
+      // 只处理 delete / insert，equal / replace 跳过
+      if (op != DiffOperation.delete && op != DiffOperation.insert) {
+        i++;
+        continue;
+      }
+      // 连续同类操作算一块
+      final start = i;
+      while (i < diff.entries.length && diff.entries[i].operation == op) {
+        i++;
+      }
+      out.add((start: start, end: i));
+    }
+    return out;
+  }
+
+  // _findPureBlocks 的缓存，避免每次重扫
+  List<({int start, int end})>? _pureBlocksCache;
+  DiffResult? _pureBlocksCacheFor;
+
+  List<({int start, int end})> _pureBlocksOf(DiffResult diff) {
+    if (identical(_pureBlocksCacheFor, diff) && _pureBlocksCache != null) {
+      return _pureBlocksCache!;
+    }
+    _pureBlocksCache = _findPureBlocks(diff);
+    _pureBlocksCacheFor = diff;
+    return _pureBlocksCache!;
+  }
+
+  /// 全文是否有独有块。按钮的 enabled 状态用它决定。
+  bool _hasPureBlocks(DiffResult diff) => _pureBlocksOf(diff).isNotEmpty;
+
+  /// 跳过当前/下一个独有块。
+  ///
+  /// 行为：
+  ///   · 当前在独有块内 → 跳到这串独有块之后
+  ///   · 当前不在独有块内 → 跳到当前位置之后第一串独有块之后
+  ///   · 紧邻的独有块（[delete×200][insert×50] 中间没 equal）一起跳过
+  ///   · 后面没有独有块了 → 提示
+  ///   · grouped 视图 → 委托给 GroupedDiffView.jumpOverPureBlock()
+  void _jumpOverPureBlock() {
+    CrashLogger.instance.mark('跳过独有行块');
+    final diff = _diff;
+    if (diff == null) {
+      _toast('请先导入两份文档');
+      return;
+    }
+
+    final mode = ref.read(viewModeProvider);
+
+    // ---------- grouped 视图：委托 ----------
+    if (mode == ViewMode.grouped) {
+      final state = _groupedKey.currentState;
+      if (state == null) {
+        _toast('视图尚未就绪，请稍候');
+        return;
+      }
+      final ok = (state as dynamic).jumpOverPureBlock() as bool?;
+      if (ok != true) {
+        _toast('跨行块视图下没有可跳过的独有行（左右相邻的独有内容会被合并，可切到其他视图试试）');
+      }
+      return;
+    }
+
+    // ---------- 其他 4 个视图 ----------
+    final currentRow = _currentTopRow();
+    if (currentRow == null) {
+      _toast('当前视图尚未就绪，请稍候');
+      return;
+    }
+
+    final map = _entryToRowMapOf(diff, mode);
+    final blocks = _pureBlocksOf(diff);
+    if (blocks.isEmpty) {
+      _toast('本文档没有独有行块');
+      return;
+    }
+
+    // 找到当前位置之后的第一个"连续独有块序列"，跳到序列结束之后。
+    int? targetEnd;
+    for (var idx = 0; idx < blocks.length; idx++) {
+      final block = blocks[idx];
+      final endRow = map[block.end - 1];
+      if (endRow == null) continue;
+      // 这一块已经完全滚到屏幕上方 → 跳过
+      if (endRow < currentRow) continue;
+
+      // 找到第一个当前可见的独有块，把紧邻的独有块一起跳过：
+      // start == 上一块的 end → 中间没有 equal，还是独有行。
+      // （[delete×200][insert×50] 只跳 delete 会落在 insert 开头，
+      //   屏幕上仍是独有行，等于没跳——所以必须串起来跳。）
+      var nextIdx = idx + 1;
+      while (nextIdx < blocks.length &&
+          blocks[nextIdx].start == blocks[nextIdx - 1].end) {
+        nextIdx++;
+      }
+      targetEnd = blocks[nextIdx - 1].end;
+      break;
+    }
+
+    if (targetEnd == null) {
+      _toast('后面没有独有行块了');
+      return;
+    }
+
+    // 目标 = 从 targetEnd 起第一个"有行号"的 entry：
+    //   merged / sideBySide / diffOnly 里相同行有行号，直接命中；
+    //   diffOnlyPlain 不渲染相同行，落到下一个差异行。
+    //   一个都没有（独有块直到文件尾 / 后面没有差异行）→ 提示。
+    for (var j = targetEnd; j < diff.entries.length; j++) {
+      if (map[j] != null) {
+        _log('跳转: 跳过独有行块');
+        _scrollToEntry(j);
+        return;
+      }
+    }
+    _toast('这已经是文件最后的独有行块了');
+  }
+
   // ==================== 切视图 ====================
 
  Future<void> _switchView(ViewMode newMode) async {
@@ -2230,6 +2365,8 @@ Future<void> _openLineList({List<String>? appendLines}) async {
     _scannedQuery = '';
     _cachedDiffIndices = null;
     _cachedDiffIndicesFor = null;
+    _pureBlocksCache = null;
+    _pureBlocksCacheFor = null;
     _entryToRowMap = null;
     _entryToRowMapFor = null;
     _entryToRowMapMode = null;
@@ -2707,7 +2844,15 @@ toolbarHeight: 43,
     onPressed: () => Navigator.of(context).maybePop(),
   ),
   titleSpacing: 0,
-        actions: [
+        // 中间按钮组放进横向滚动区：屏幕窄时可左右滑动，
+        // 关闭键、查找、更多固定不动。宽屏时右对齐，与改动前一致。
+        title: Align(
+          alignment: Alignment.centerRight,
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            reverse: true,
+            child: Row(
+              children: [
           // ===== 左侧组：删左 + 批左 =====
           Builder(builder: (ctx) {
             final enabled = !_originalDeleted &&
@@ -2785,6 +2930,19 @@ toolbarHeight: 43,
               ),
             ),
           ),
+          // ⏭ 跳过独有行块（纯增/纯删）
+          Builder(builder: (ctx) {
+            final hasPure = _hasPureBlocks(diff);
+            return IconButton(
+              key: const Key('skip-pure-block'),
+              icon: const Icon(Icons.fast_forward),
+              iconSize: 22,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+              tooltip: hasPure ? '跳过独有行块' : '本文档没有独有行',
+              onPressed: hasPure ? _jumpOverPureBlock : null,
+            );
+          }),
           Builder(builder: (ctx) {
             final enabled = !_modifiedDeleted &&
                 ref.read(modifiedFilePathProvider) != null;
@@ -2807,6 +2965,12 @@ toolbarHeight: 43,
               ),
             );
           }),
+              ],
+            ),
+          ),
+        ),
+        // 右侧固定：查找 / 更多
+        actions: [
           IconButton(
           icon: const Icon(Icons.find_in_page),
             iconSize: 26,
