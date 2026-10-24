@@ -14,6 +14,7 @@ import '../../diff/domain/diff_operation.dart';
 import '../../diff/domain/diff_result.dart';
 import '../../edit/presentation/edit_screen.dart';
 import '../../file_browser/presentation/comparison_settings_screen.dart';
+import '../../file_browser/presentation/dialogs/file_properties_dialog.dart';
 import '../../import/presentation/providers/import_providers.dart';
 import '../../preprocessing/application/preprocessing_service.dart';
 import '../../preprocessing/domain/preprocessing_rule.dart';
@@ -47,6 +48,10 @@ const List<String> _defaultDiffToolbarOrder = <String>[
   'nextDiff',
   'deleteRight',
   'find',
+  'jumpTop',
+  'jumpBottom',
+  'more',
+  'sort',
 ];
 
 /// 顶栏按钮顺序（持久化，拖动排序后立即生效）。
@@ -2635,6 +2640,44 @@ void _toast(String msg) {
     }
   }
 
+  /// 长按「删左 / 删右」：弹出该侧文件的属性。
+  Future<void> _showSideProperties({required bool isOriginal}) async {
+    final path = ref.read(
+      isOriginal ? originalFilePathProvider : modifiedFilePathProvider,
+    );
+    if (path == null || path.isEmpty) return;
+    final fallbackName = ref.read(
+      isOriginal ? originalFileNameProvider : modifiedFileNameProvider,
+    );
+    final name = (fallbackName == null || fallbackName.isEmpty)
+        ? path.split('/').last
+        : fallbackName;
+
+    int? size;
+    DateTime? modified;
+    DateTime? accessed;
+    try {
+      final st = await File(path).stat();
+      if (st.type != FileSystemEntityType.notFound) {
+        size = st.size;
+        modified = st.modified;
+        accessed = st.accessed;
+      }
+    } catch (_) {}
+
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (_) => FilePropertiesDialog(
+        name: name,
+        path: path,
+        size: size,
+        modified: modified,
+        accessed: accessed,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final diffAsync = ref.watch(diffResultProvider);
@@ -2913,6 +2956,7 @@ void _toast(String msg) {
             child: InkWell(
               key: Key(isLeft ? 'delete-left' : 'delete-right'),
               onTap: enabled ? () => _deleteSide(isOriginal: isLeft) : null,
+              onLongPress: () => _showSideProperties(isOriginal: isLeft),
               child: Center(
                 child: Text(
                   isLeft ? '删左' : '删右',
@@ -2933,22 +2977,6 @@ void _toast(String msg) {
           return InkWell(
             key: Key(isLeft ? 'prev-diff' : 'next-diff'),
             onTap: () => _openLineListFromDiff(isLeft: isLeft),
-            onLongPress: () {
-              if (viewMode == ViewMode.grouped) {
-                final state = _groupedKey.currentState as dynamic;
-                if (isLeft) {
-                  state?.jumpToTop();
-                } else {
-                  state?.jumpToBottom();
-                }
-              } else {
-                if (isLeft) {
-                  _jumpToDocTop();
-                } else {
-                  _jumpToDocBottom();
-                }
-              }
-            },
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               child: CustomPaint(
@@ -2970,8 +2998,212 @@ void _toast(String msg) {
           tooltip: '查找 / 替换',
           onPressed: () => setState(() => _showFind = !_showFind),
         );
+      case 'jumpTop':
+      case 'jumpBottom':
+        {
+          final isTop = id == 'jumpTop';
+          return IconButton(
+            icon: Icon(
+              isTop ? Icons.vertical_align_top : Icons.vertical_align_bottom,
+            ),
+            iconSize: 22,
+            visualDensity: VisualDensity.compact,
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+            tooltip: isTop ? '跳到开头' : '跳到结尾',
+            onPressed: () {
+              if (viewMode == ViewMode.grouped) {
+                final state = _groupedKey.currentState as dynamic;
+                if (isTop) {
+                  state?.jumpToTop();
+                } else {
+                  state?.jumpToBottom();
+                }
+              } else {
+                if (isTop) {
+                  _jumpToDocTop();
+                } else {
+                  _jumpToDocBottom();
+                }
+              }
+            },
+          );
+        }
+      case 'more':
+        return _buildMoreButton(viewMode);
+      case 'sort':
+        return IconButton(
+          key: const Key('toolbar-sort'),
+          icon: const Icon(Icons.sort),
+          iconSize: 20,
+          visualDensity: VisualDensity.compact,
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+          constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+          tooltip: '排序顶栏按钮',
+          onPressed: _showToolbarSortDialog,
+        );
     }
     return const SizedBox.shrink();
+  }
+
+  /// 顶栏「更多」菜单。
+  Widget _buildMoreButton(ViewMode viewMode) {
+    final noWrap = ref.watch(noWrapProvider);
+    return PopupMenuButton<String>(
+      icon: const Icon(Icons.more_vert),
+      tooltip: '更多操作',
+      onSelected: (v) {
+        if (v == 'edit') {
+          _openEdit();
+        } else if (v == 'exportDiff') {
+          _exportDiff();
+        } else if (v == 'delOriginal') {
+          _deleteSide(isOriginal: true);
+        } else if (v == 'delModified') {
+          _deleteSide(isOriginal: false);
+        } else if (v == 'orientation') {
+          _toggleOrientation();
+        } else if (v == 'noWrap') {
+          final cur = ref.read(noWrapProvider);
+          ref.read(noWrapProvider.notifier).state = !cur;
+          if (_hScrollController.hasClients) {
+            _hScrollController.jumpTo(0);
+          }
+        } else if (v == 'listLeftDiff') {
+          _openLineListFromDiff(isLeft: true);
+        } else if (v == 'listRightDiff') {
+          _openLineListFromDiff(isLeft: false);
+        } else if (v == 'displaySettings') {
+          _openDisplaySettings();
+        } else if (v == 'comparisonSettings') {
+          _openComparisonSettings();
+        } else if (v == 'diagnostic') {
+          _openDiagnostic();
+        } else if (v == 'defaultView') {
+          _pickDefaultViewMode();
+        }
+      },
+      itemBuilder: (context) => [
+        const PopupMenuItem<String>(
+          value: 'exportDiff',
+          child: Row(
+            children: [
+              Icon(Icons.ios_share),
+              SizedBox(width: 10),
+              Text('导出差异为 txt'),
+            ],
+          ),
+        ),
+        const PopupMenuDivider(),
+        const PopupMenuItem<String>(
+          value: 'listLeftDiff',
+          child: Text('批处理左差异'),
+        ),
+        const PopupMenuItem<String>(
+          value: 'listRightDiff',
+          child: Text('批处理右差异'),
+        ),
+        const PopupMenuDivider(),
+        PopupMenuItem<String>(
+          value: 'delOriginal',
+          enabled:
+              !_originalDeleted && ref.read(originalFilePathProvider) != null,
+          child: Row(
+            children: [
+              const Icon(Icons.delete_outline, color: Colors.red),
+              const SizedBox(width: 10),
+              Text(_originalDeleted ? '左边文件已删除' : '删除左边文件'),
+            ],
+          ),
+        ),
+        PopupMenuItem<String>(
+          value: 'delModified',
+          enabled:
+              !_modifiedDeleted && ref.read(modifiedFilePathProvider) != null,
+          child: Row(
+            children: [
+              const Icon(Icons.delete_outline, color: Colors.red),
+              const SizedBox(width: 10),
+              Text(_modifiedDeleted ? '右边文件已删除' : '删除右边文件'),
+            ],
+          ),
+        ),
+        const PopupMenuDivider(),
+        const PopupMenuItem<String>(
+          value: 'displaySettings',
+          child: Row(
+            children: [
+              Icon(Icons.format_size),
+              SizedBox(width: 10),
+              Text('显示设置'),
+            ],
+          ),
+        ),
+        const PopupMenuItem<String>(
+          value: 'comparisonSettings',
+          child: Row(
+            children: [
+              Icon(Icons.rule),
+              SizedBox(width: 10),
+              Text('对比规则设置'),
+            ],
+          ),
+        ),
+        PopupMenuItem<String>(
+          value: 'noWrap',
+          enabled: viewMode != ViewMode.grouped,
+          child: Row(
+            children: [
+              Icon(
+                viewMode == ViewMode.grouped
+                    ? Icons.block
+                    : (noWrap ? Icons.wrap_text : Icons.notes),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                viewMode == ViewMode.grouped
+                    ? '跨行块视图不支持不换行'
+                    : (noWrap ? '关闭不换行' : '开启不换行'),
+              ),
+            ],
+          ),
+        ),
+        const PopupMenuItem<String>(
+          value: 'defaultView',
+          child: Row(
+            children: [
+              Icon(Icons.visibility),
+              SizedBox(width: 10),
+              Text('切换视图'),
+            ],
+          ),
+        ),
+        PopupMenuItem<String>(
+          value: 'orientation',
+          child: Row(
+            children: [
+              Icon(
+                _landscape ? Icons.screen_rotation : Icons.rotate_left,
+                color: Theme.of(context).colorScheme.primary,
+              ),
+              const SizedBox(width: 10),
+              Text(_landscape ? '切换到竖屏' : '切换到横屏'),
+            ],
+          ),
+        ),
+        const PopupMenuDivider(),
+        const PopupMenuItem<String>(
+          value: 'diagnostic',
+          child: Row(
+            children: [
+              Icon(Icons.bug_report),
+              SizedBox(width: 10),
+              Text('诊断'),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 
   /// 顶栏分组竖线（固定跟在「批左」后面）。
@@ -2994,6 +3226,10 @@ void _toast(String msg) {
     'nextDiff': '右侧行清单（批右）',
     'deleteRight': '删除右侧文件',
     'find': '查找 / 替换',
+    'jumpTop': '跳到开头',
+    'jumpBottom': '跳到结尾',
+    'more': '更多操作',
+    'sort': '按钮排序',
   };
 
   static const Map<String, IconData> _toolbarItemIcons = {
@@ -3004,6 +3240,10 @@ void _toast(String msg) {
     'nextDiff': Icons.format_list_bulleted,
     'deleteRight': Icons.delete_outline,
     'find': Icons.find_in_page,
+    'jumpTop': Icons.vertical_align_top,
+    'jumpBottom': Icons.vertical_align_bottom,
+    'more': Icons.more_vert,
+    'sort': Icons.sort,
   };
 
   /// 排序弹窗：拖动调整顶栏按钮顺序，松手立即生效并持久化。
@@ -3026,7 +3266,7 @@ void _toast(String msg) {
                     const Padding(
                       padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
                       child: Text(
-                        '拖动右侧手柄调整顺序，松手立即生效。「更多」和排序按钮在顶栏最末尾，左滑顶栏可见。',
+                        '拖动右侧手柄调整顺序，松手立即生效。「更多」、排序按钮以及跳开头/跳结尾按钮都可以一起排序。',
                         style: TextStyle(fontSize: 12),
                       ),
                     ),
@@ -3102,12 +3342,12 @@ void _toast(String msg) {
 toolbarHeight: 43,
   automaticallyImplyLeading: false,
   titleSpacing: 0,
-        // 整条顶栏（含关闭、更多、排序）一起横向滚动，排序按钮藏在最末尾
+        // 整条顶栏按钮一起横向滚动，顺序由排序按钮调整
         title: SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           child: Row(
             children: [
-          // 按钮顺序来自 _diffToolbarOrderProvider，可在最右侧排序按钮里调整
+          // 全部按钮（含更多、排序）顺序来自 _diffToolbarOrderProvider
           for (final id in toolbarOrder) ...[
             _buildToolbarButton(id, diff, viewMode),
             if (id == 'prevDiff') ...[
@@ -3117,183 +3357,7 @@ toolbarHeight: 43,
             ] else
               const SizedBox(width: 2),
           ],
-          // 更多：随顶栏一起滚动
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert),
-            tooltip: '更多操作',
-            onSelected: (v) {
-              if (v == 'edit') {
-                _openEdit();
-              } else if (v == 'exportDiff') {
-                _exportDiff();
-              } else if (v == 'delOriginal') {
-                _deleteSide(isOriginal: true);
-              } else if (v == 'delModified') {
-                _deleteSide(isOriginal: false);
-              } else if (v == 'orientation') {
-                _toggleOrientation();
-              } else if (v == 'noWrap') {
-                final cur = ref.read(noWrapProvider);
-                ref.read(noWrapProvider.notifier).state = !cur;
-                if (_hScrollController.hasClients) {
-                  _hScrollController.jumpTo(0);
-                }
-                } else if (v == 'listLeftDiff') {
-  _openLineListFromDiff(isLeft: true);
-} else if (v == 'listRightDiff') {
-  _openLineListFromDiff(isLeft: false);
-              } else if (v == 'displaySettings') {
-                _openDisplaySettings();
-              } else if (v == 'comparisonSettings') {
-                _openComparisonSettings();
-              } else if (v == 'diagnostic') {
-                _openDiagnostic();
-              } else if (v == 'defaultView') {
-                _pickDefaultViewMode();
-              }
-            },
-            itemBuilder: (context) => [
-              
-              const PopupMenuItem<String>(
-                value: 'exportDiff',
-                child: Row(
-                  children: [
-                    Icon(Icons.ios_share),
-                    SizedBox(width: 10),
-                    Text('导出差异为 txt'),
-                  ],
-                ),
-              ),
-           const PopupMenuDivider(),
-const PopupMenuItem<String>(
-  value: 'listLeftDiff',
-  child: Text('批处理左差异'),
-),
-const PopupMenuItem<String>(
-  value: 'listRightDiff',
-  child: Text('批处理右差异'),
-),
-const PopupMenuDivider(),
-
-PopupMenuItem<String>(
-  value: 'delOriginal',
-                enabled: !_originalDeleted &&
-                    ref.read(originalFilePathProvider) != null,
-                child: Row(
-                  children: [
-                    const Icon(Icons.delete_outline, color: Colors.red),
-                    const SizedBox(width: 10),
-                    Text(_originalDeleted ? '左边文件已删除' : '删除左边文件'),
-                  ],
-                ),
-              ),
-              PopupMenuItem<String>(
-                value: 'delModified',
-                enabled: !_modifiedDeleted &&
-                    ref.read(modifiedFilePathProvider) != null,
-                child: Row(
-                  children: [
-                    const Icon(Icons.delete_outline, color: Colors.red),
-                    const SizedBox(width: 10),
-                    Text(_modifiedDeleted ? '右边文件已删除' : '删除右边文件'),
-                  ],
-                ),
-              ),
-              const PopupMenuDivider(),
-              const PopupMenuItem<String>(
-                value: 'displaySettings',
-                child: Row(
-                  children: [
-                    Icon(Icons.format_size),
-                    SizedBox(width: 10),
-                    Text('显示设置'),
-                  ],
-                ),
-              ),
-              const PopupMenuItem<String>(
-                value: 'comparisonSettings',
-                child: Row(
-                  children: [
-                    Icon(Icons.rule),
-                    SizedBox(width: 10),
-                    Text('对比规则设置'),
-                  ],
-                ),
-              ),
-              PopupMenuItem<String>(
-                value: 'noWrap',
-                enabled: viewMode != ViewMode.grouped,
-                child: Row(
-                  children: [
-                    Icon(
-                      viewMode == ViewMode.grouped
-                          ? Icons.block
-                          : (noWrap ? Icons.wrap_text : Icons.notes),
-                    ),
-                    const SizedBox(width: 10),
-                    Text(
-                      viewMode == ViewMode.grouped
-                          ? '跨行块视图不支持不换行'
-                          : (noWrap ? '关闭不换行' : '开启不换行'),
-                    ),
-                  ],
-                ),
-              ),
- const PopupMenuItem<String>(
-                value: 'defaultView',
-                child: Row(
-                  children: [
-                    Icon(Icons.visibility),
-                    SizedBox(width: 10),
-                    Text('切换视图'),
-                  ],
-                ),
-              ),
-               PopupMenuItem<String>(
-                value: 'orientation',
-                child: Row(
-                  children: [
-                    Icon(
-                      _landscape
-                          ? Icons.screen_rotation
-                          : Icons.rotate_left,
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
-                    const SizedBox(width: 10),
-                    Text(_landscape ? '切换到竖屏' : '切换到横屏'),
-                  ],
-                ),
-              ),
-              
-             
-              const PopupMenuDivider(),
-              const PopupMenuItem<String>(
-                value: 'diagnostic',
-                child: Row(
-                  children: [
-                    Icon(Icons.bug_report),
-                    SizedBox(width: 10),
-                    Text('诊断'),
-                  ],
-                ),
-              ),
-              
-             
-            ],
-          ),
-          const SizedBox(width: 2),
-          // 排序：放在顶栏最末尾，默认藏在右侧，左滑顶栏才露出
-          IconButton(
-            key: const Key('toolbar-sort'),
-            icon: const Icon(Icons.sort),
-            iconSize: 20,
-            visualDensity: VisualDensity.compact,
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-            tooltip: '排序顶栏按钮',
-            onPressed: _showToolbarSortDialog,
-          ),
-            ],
+                      ],
           ),
         ),
       ),
