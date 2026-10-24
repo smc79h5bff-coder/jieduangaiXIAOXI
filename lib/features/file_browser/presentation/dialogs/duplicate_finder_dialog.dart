@@ -3,6 +3,11 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart' show compute;
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../../import/presentation/providers/import_providers.dart';
+import '../../../parser/application/document_parser.dart';
+import '../../../viewer/presentation/diff_viewer_screen.dart';
 
 /// 单个文件允许参与查重的最大字节数。超过的直接跳过，避免长时间占用。
 const int _maxCheckBytes = 100 * 1024 * 1024;
@@ -33,6 +38,9 @@ class _DupFile {
 
   /// 默认不勾选，由用户手动选择要删除的文件。
   bool selected = false;
+
+  /// 是否被标记为「对比对象」，与上面的删除勾选互不影响。
+  bool markedForCompare = false;
 }
 
 class _DupGroup {
@@ -43,8 +51,6 @@ class _DupGroup {
   final List<_DupFile> files;
 
   bool get allSelected => files.every((f) => f.selected);
-
-  String get displayName => files.first.candidate.name;
 }
 
 /// 收集分块哈希算完后的摘要。
@@ -102,7 +108,7 @@ String _errText(Object e) {
 ///
 /// 结果按组展示，默认全部不勾选；用户勾选哪个就永久删除哪个。
 /// 关闭时返回已删除文件的路径集合，未删除则为空集合。
-class DuplicateFinderDialog extends StatefulWidget {
+class DuplicateFinderDialog extends ConsumerStatefulWidget {
   const DuplicateFinderDialog({
     super.key,
     required this.candidates,
@@ -111,10 +117,12 @@ class DuplicateFinderDialog extends StatefulWidget {
   final List<DuplicateCandidate> candidates;
 
   @override
-  State<DuplicateFinderDialog> createState() => _DuplicateFinderDialogState();
+  ConsumerState<DuplicateFinderDialog> createState() =>
+      _DuplicateFinderDialogState();
 }
 
-class _DuplicateFinderDialogState extends State<DuplicateFinderDialog> {
+class _DuplicateFinderDialogState
+    extends ConsumerState<DuplicateFinderDialog> {
   bool _scanning = true;
   bool _cancelRequested = false;
   int _checked = 0;
@@ -169,6 +177,94 @@ class _DuplicateFinderDialogState extends State<DuplicateFinderDialog> {
       if (g.allSelected) return true;
     }
     return false;
+  }
+
+  List<_DupFile> get _compareMarks => [
+        for (final g in _groups)
+          for (final f in g.files)
+            if (f.markedForCompare) f,
+      ];
+
+  void _toggleCompareMark(_DupFile file) {
+    if (_processing) return;
+    setState(() {
+      if (file.markedForCompare) {
+        file.markedForCompare = false;
+        return;
+      }
+      final marked = _compareMarks;
+      // 最多两个：再标记第三个时顶掉最早标记的那个。
+      if (marked.length >= 2) marked.first.markedForCompare = false;
+      file.markedForCompare = true;
+    });
+  }
+
+  /// 打开项目里已有的对比页（与文件浏览器底部「对比」按钮同一条路径）。
+  Future<void> _openCompare() async {
+    final marks = _compareMarks;
+    if (marks.length != 2) return;
+    final left = marks[0].candidate;
+    final right = marks[1].candidate;
+
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+
+    try {
+      final leftBytes = await File(left.path).readAsBytes();
+      final leftParsed = await DocumentParser.parse(
+        fileName: left.name,
+        bytes: leftBytes,
+      );
+      final rightBytes = await File(right.path).readAsBytes();
+      final rightParsed = await DocumentParser.parse(
+        fileName: right.name,
+        bytes: rightBytes,
+      );
+
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop();
+
+      ref.read(originalRawTextProvider.notifier).state = leftParsed.plainText;
+      ref.read(modifiedRawTextProvider.notifier).state = rightParsed.plainText;
+      ref.read(originalFileNameProvider.notifier).state = leftParsed.fileName;
+      ref.read(modifiedFileNameProvider.notifier).state = rightParsed.fileName;
+      ref.read(originalEncodingProvider.notifier).state = 'UTF-8';
+      ref.read(modifiedEncodingProvider.notifier).state = 'UTF-8';
+      ref.read(originalFilePathProvider.notifier).state = left.path;
+      ref.read(modifiedFilePathProvider.notifier).state = right.path;
+      ref.read(importRevisionProvider.notifier).state++;
+      ref.read(editedOriginalProvider.notifier).state = null;
+      ref.read(editedModifiedProvider.notifier).state = null;
+
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => const DiffViewerScreen(),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop();
+      await showDialog<void>(
+        context: context,
+        builder: (c) => AlertDialog(
+          insetPadding: _inset,
+          titlePadding: _titlePad,
+          contentPadding: _contentPad,
+          actionsPadding: _actionsPad,
+          title: const Text('打不开对比页'),
+          content: Text('读取文件失败：${_errText(e)}'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(c),
+              child: const Text('关闭'),
+            ),
+          ],
+        ),
+      );
+    }
   }
 
   Future<void> _scan() async {
@@ -539,6 +635,16 @@ class _DuplicateFinderDialogState extends State<DuplicateFinderDialog> {
                   color: s.onSurface.withValues(alpha: 0.7),
                 ),
               ),
+              if (_compareMarks.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    _compareMarks.length == 2
+                        ? '已标记 2 个用于对比'
+                        : '已标记 1 个用于对比，再标记 1 个',
+                    style: TextStyle(fontSize: 12, color: s.primary),
+                  ),
+                ),
               if (_hasFullySelectedGroup)
                 Padding(
                   padding: const EdgeInsets.only(top: 2),
@@ -583,6 +689,12 @@ class _DuplicateFinderDialogState extends State<DuplicateFinderDialog> {
             : () => Navigator.of(context).pop(const <String>{}),
         child: const Text('取消'),
       ),
+      TextButton.icon(
+        onPressed:
+            !_processing && _compareMarks.length == 2 ? _openCompare : null,
+        icon: const Icon(Icons.compare_arrows, size: 16),
+        label: const Text('对比'),
+      ),
       FilledButton(
         onPressed: canDelete ? _process : null,
         child: const Text('删除所选…'),
@@ -612,10 +724,7 @@ class _DuplicateFinderDialogState extends State<DuplicateFinderDialog> {
             ),
             child: Text(
               '组 ${index + 1} · ${group.files.length} 份 · '
-              '${_fmtBytes(group.size)} · MD5 ${group.hash.substring(0, 8)} · '
-              '${group.displayName}',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+              '${_fmtBytes(group.size)} · MD5 ${group.hash}',
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
             ),
           ),
@@ -626,10 +735,11 @@ class _DuplicateFinderDialogState extends State<DuplicateFinderDialog> {
   }
 
   Widget _buildFileRow(_DupFile file) {
+    final s = Theme.of(context).colorScheme;
     return InkWell(
       onTap: _processing ? null : () => _toggleDelete(file, !file.selected),
       child: Padding(
-        padding: const EdgeInsets.only(left: 2, right: 6, top: 1, bottom: 1),
+        padding: const EdgeInsets.only(left: 2, right: 2, top: 1, bottom: 1),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -645,6 +755,22 @@ class _DuplicateFinderDialogState extends State<DuplicateFinderDialog> {
                 child: Text(
                   file.candidate.path,
                   style: const TextStyle(fontSize: 12),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: IconButton(
+                iconSize: 20,
+                tooltip: file.markedForCompare ? '取消对比标记' : '标记对比',
+                color: file.markedForCompare ? s.primary : null,
+                visualDensity: VisualDensity.compact,
+                onPressed:
+                    _processing ? null : () => _toggleCompareMark(file),
+                icon: Icon(
+                  file.markedForCompare
+                      ? Icons.radio_button_checked
+                      : Icons.compare_arrows,
                 ),
               ),
             ),
