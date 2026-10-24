@@ -22,6 +22,7 @@ import '../../preprocessing/domain/preprocessing_rule.dart';
 import '../../preprocessing/application/aho_corasick.dart';
 
 import '../../../core/debug/crash_logger.dart';
+import '../../../core/storage/persistent_notifier.dart';
 import 'diagnostic_screen.dart';
 import 'diff_text_index.dart';
 import 'grouped_diff_view.dart';
@@ -36,6 +37,48 @@ import 'widgets/diff_only_plain_view.dart';
 import 'widgets/diff_only_view.dart';
 import 'widgets/merged_view.dart';
 import 'widgets/side_by_side_view.dart';
+
+/// 顶栏按钮的默认顺序，id 与 [_buildToolbarButton] 对应。
+const List<String> _defaultDiffToolbarOrder = <String>[
+  'close',
+  'skip',
+  'deleteLeft',
+  'prevDiff',
+  'nextDiff',
+  'deleteRight',
+  'find',
+];
+
+/// 顶栏按钮顺序（持久化，拖动排序后立即生效）。
+final _diffToolbarOrderProvider =
+    NotifierProvider<_DiffToolbarOrderNotifier, List<String>>(
+  _DiffToolbarOrderNotifier.new,
+);
+
+class _DiffToolbarOrderNotifier extends StringListPrefNotifier {
+  _DiffToolbarOrderNotifier()
+      : super(
+          key: 'jianming.viewer.diffToolbarOrder',
+          initial: _defaultDiffToolbarOrder,
+        );
+
+  /// 读取时做一次清洗：丢弃不认识的 id、去重，并把新增按钮补到末尾，
+  /// 保证升级后新按钮不会因为旧顺序而消失。
+  @override
+  List<String> decode(String raw) {
+    final saved = super.decode(raw);
+    final out = <String>[];
+    for (final id in saved) {
+      if (_defaultDiffToolbarOrder.contains(id) && !out.contains(id)) {
+        out.add(id);
+      }
+    }
+    for (final id in _defaultDiffToolbarOrder) {
+      if (!out.contains(id)) out.add(id);
+    }
+    return out;
+  }
+}
 
 class DiffViewerScreen extends ConsumerStatefulWidget {
   const DiffViewerScreen({super.key});
@@ -2833,7 +2876,7 @@ void _toast(String msg) {
 
   // ==================== 顶栏按钮（可排序） ====================
 
-  /// 顶栏单个按钮。id 与 diffToolbarOrderProvider 里的顺序项对应。
+  /// 顶栏单个按钮。id 与 _diffToolbarOrderProvider 里的顺序项对应。
   Widget _buildToolbarButton(String id, DiffResult diff, ViewMode viewMode) {
     switch (id) {
       case 'close':
@@ -2977,7 +3020,7 @@ void _toast(String msg) {
             height: (size.height * 0.6).clamp(220.0, 420.0).toDouble(),
             child: StatefulBuilder(
               builder: (dialogCtx, setDialogState) {
-                final order = ref.read(diffToolbarOrderProvider);
+                final order = ref.read(_diffToolbarOrderProvider);
                 return Column(
                   children: [
                     const Padding(
@@ -2998,7 +3041,7 @@ void _toast(String msg) {
                           final moved = list.removeAt(oldIndex);
                           list.insert(newIndex, moved);
                           ref
-                              .read(diffToolbarOrderProvider.notifier)
+                              .read(_diffToolbarOrderProvider.notifier)
                               .update(list);
                           setDialogState(() {});
                         },
@@ -3046,7 +3089,7 @@ void _toast(String msg) {
     final noWrap = ref.watch(noWrapProvider);
     final diffBlocks = _diffBlockCount(diff);
     // 顶栏按钮顺序（可拖动排序，改动立即生效）
-    final toolbarOrder = ref.watch(diffToolbarOrderProvider);
+    final toolbarOrder = ref.watch(_diffToolbarOrderProvider);
 
   return PopScope(
   canPop: !_showFind,
@@ -3064,7 +3107,7 @@ toolbarHeight: 43,
           scrollDirection: Axis.horizontal,
           child: Row(
             children: [
-          // 按钮顺序来自 diffToolbarOrderProvider，可在最右侧排序按钮里调整
+          // 按钮顺序来自 _diffToolbarOrderProvider，可在最右侧排序按钮里调整
           for (final id in toolbarOrder) ...[
             _buildToolbarButton(id, diff, viewMode),
             if (id == 'prevDiff') ...[
