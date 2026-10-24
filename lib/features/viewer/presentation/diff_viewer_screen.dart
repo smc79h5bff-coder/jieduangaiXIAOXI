@@ -2831,6 +2831,211 @@ void _toast(String msg) {
     return inner;
   }
 
+  // ==================== 顶栏按钮（可排序） ====================
+
+  /// 顶栏单个按钮。id 与 diffToolbarOrderProvider 里的顺序项对应。
+  Widget _buildToolbarButton(String id, DiffResult diff, ViewMode viewMode) {
+    switch (id) {
+      case 'close':
+        return IconButton(
+          icon: const Icon(Icons.disabled_by_default),
+          tooltip: '关闭',
+          // 与原来 leading 的 40px 宽度一致，图标不贴屏幕边缘
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          onPressed: () => Navigator.of(context).maybePop(),
+        );
+      case 'skip':
+        {
+          final hasPure = _hasPureBlocks(diff);
+          return IconButton(
+            key: const Key('skip-pure-block'),
+            icon: const Icon(Icons.fast_forward),
+            iconSize: 22,
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+            constraints: const BoxConstraints(minWidth: 48, minHeight: 40),
+            tooltip: hasPure ? '跳过独有行块' : '本文档没有独有行',
+            onPressed: hasPure ? _jumpOverPureBlock : null,
+          );
+        }
+      case 'deleteLeft':
+      case 'deleteRight':
+        {
+          final isLeft = id == 'deleteLeft';
+          final enabled = isLeft
+              ? !_originalDeleted && ref.read(originalFilePathProvider) != null
+              : !_modifiedDeleted && ref.read(modifiedFilePathProvider) != null;
+          return SizedBox(
+            width: 54,
+            height: 42,
+            child: InkWell(
+              key: Key(isLeft ? 'delete-left' : 'delete-right'),
+              onTap: enabled ? () => _deleteSide(isOriginal: isLeft) : null,
+              child: Center(
+                child: Text(
+                  isLeft ? '删左' : '删右',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color:
+                        enabled ? Colors.red : Theme.of(context).disabledColor,
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
+      case 'prevDiff':
+      case 'nextDiff':
+        {
+          final isLeft = id == 'prevDiff';
+          return InkWell(
+            key: Key(isLeft ? 'prev-diff' : 'next-diff'),
+            onTap: () => _openLineListFromDiff(isLeft: isLeft),
+            onLongPress: () {
+              if (viewMode == ViewMode.grouped) {
+                final state = _groupedKey.currentState as dynamic;
+                if (isLeft) {
+                  state?.jumpToTop();
+                } else {
+                  state?.jumpToBottom();
+                }
+              } else {
+                if (isLeft) {
+                  _jumpToDocTop();
+                } else {
+                  _jumpToDocBottom();
+                }
+              }
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: CustomPaint(
+                size: const Size(37, 26),
+                painter: _BatchExtractIconPainter(
+                  pointLeft: isLeft,
+                  color: IconTheme.of(context).color ??
+                      Theme.of(context).colorScheme.onSurface,
+                ),
+              ),
+            ),
+          );
+        }
+      case 'find':
+        return IconButton(
+          icon: const Icon(Icons.find_in_page),
+          iconSize: 26,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          tooltip: '查找 / 替换',
+          onPressed: () => setState(() => _showFind = !_showFind),
+        );
+    }
+    return const SizedBox.shrink();
+  }
+
+  /// 顶栏分组竖线（固定跟在「批左」后面）。
+  Widget _buildToolbarDivider() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: Container(
+        width: 1,
+        height: 20,
+        color: Theme.of(context).colorScheme.outlineVariant,
+      ),
+    );
+  }
+
+  static const Map<String, String> _toolbarItemLabels = {
+    'close': '关闭对比页',
+    'skip': '跳过独有行块',
+    'deleteLeft': '删除左侧文件',
+    'prevDiff': '左侧行清单（批左）',
+    'nextDiff': '右侧行清单（批右）',
+    'deleteRight': '删除右侧文件',
+    'find': '查找 / 替换',
+  };
+
+  static const Map<String, IconData> _toolbarItemIcons = {
+    'close': Icons.disabled_by_default,
+    'skip': Icons.fast_forward,
+    'deleteLeft': Icons.delete_outline,
+    'prevDiff': Icons.format_list_bulleted,
+    'nextDiff': Icons.format_list_bulleted,
+    'deleteRight': Icons.delete_outline,
+    'find': Icons.find_in_page,
+  };
+
+  /// 排序弹窗：拖动调整顶栏按钮顺序，松手立即生效并持久化。
+  Future<void> _showToolbarSortDialog() async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogCtx) {
+        final size = MediaQuery.of(dialogCtx).size;
+        return AlertDialog(
+          title: const Text('顶栏按钮排序'),
+          contentPadding: const EdgeInsets.fromLTRB(0, 8, 0, 0),
+          content: SizedBox(
+            width: (340.0).clamp(0.0, size.width - 80).toDouble(),
+            height: (size.height * 0.6).clamp(220.0, 420.0).toDouble(),
+            child: StatefulBuilder(
+              builder: (dialogCtx, setDialogState) {
+                final order = ref.read(diffToolbarOrderProvider);
+                return Column(
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
+                      child: Text(
+                        '拖动右侧手柄调整顺序，松手立即生效。「更多」和排序按钮在顶栏最末尾，左滑顶栏可见。',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ),
+                    const Divider(height: 1),
+                    Expanded(
+                      child: ReorderableListView.builder(
+                        buildDefaultDragHandles: false,
+                        itemCount: order.length,
+                        onReorder: (oldIndex, newIndex) {
+                          if (newIndex > oldIndex) newIndex -= 1;
+                          final list = List<String>.from(order);
+                          final moved = list.removeAt(oldIndex);
+                          list.insert(newIndex, moved);
+                          ref
+                              .read(diffToolbarOrderProvider.notifier)
+                              .update(list);
+                          setDialogState(() {});
+                        },
+                        itemBuilder: (dialogCtx, i) {
+                          final id = order[i];
+                          return ListTile(
+                            key: ValueKey(id),
+                            dense: true,
+                            leading: Icon(
+                              _toolbarItemIcons[id] ?? Icons.circle,
+                              size: 20,
+                            ),
+                            title: Text(_toolbarItemLabels[id] ?? id),
+                            trailing: ReorderableDragStartListener(
+                              index: i,
+                              child: const Icon(Icons.drag_handle),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogCtx),
+              child: const Text('完成'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Widget _buildDiffScaffold(
     DiffResult diff,
     ViewMode viewMode,
@@ -2840,6 +3045,8 @@ void _toast(String msg) {
   ) {
     final noWrap = ref.watch(noWrapProvider);
     final diffBlocks = _diffBlockCount(diff);
+    // 顶栏按钮顺序（可拖动排序，改动立即生效）
+    final toolbarOrder = ref.watch(diffToolbarOrderProvider);
 
   return PopScope(
   canPop: !_showFind,
@@ -2850,149 +3057,24 @@ void _toast(String msg) {
   child: Scaffold(
   appBar: AppBar(
 toolbarHeight: 43,
-  leadingWidth: 40,
-  leading: IconButton(
-    icon: const Icon(Icons.disabled_by_default),
-    tooltip: '关闭',
-    padding: EdgeInsets.zero,
-    onPressed: () => Navigator.of(context).maybePop(),
-  ),
+  automaticallyImplyLeading: false,
   titleSpacing: 0,
-        // 中间按钮组放进横向滚动区：屏幕窄时可左右滑动，
-        // 关闭键、查找、更多固定不动。宽屏时右对齐，与改动前一致；
-        // 窄屏放不下时从最左（⏭）开始显示。
-        title: Align(
-          alignment: Alignment.centerRight,
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: [
-          // ⏭ 跳过独有行块（纯增/纯删）
-          Builder(builder: (ctx) {
-            final hasPure = _hasPureBlocks(diff);
-            return IconButton(
-              key: const Key('skip-pure-block'),
-              icon: const Icon(Icons.fast_forward),
-              iconSize: 22,
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
-              constraints: const BoxConstraints(minWidth: 48, minHeight: 40),
-              tooltip: hasPure ? '跳过独有行块' : '本文档没有独有行',
-              onPressed: hasPure ? _jumpOverPureBlock : null,
-            );
-          }),
-          // ===== 左侧组：删左 + 批左 =====
-          Builder(builder: (ctx) {
-            final enabled = !_originalDeleted &&
-                ref.read(originalFilePathProvider) != null;
-            return SizedBox(
-              width: 54,
-              height: 42,
-              child: InkWell(
-                key: const Key('delete-left'),
-                onTap: enabled ? () => _deleteSide(isOriginal: true) : null,
-                child: Center(
-                  child: Text(
-                    '删左',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color:
-                          enabled ? Colors.red : Theme.of(ctx).disabledColor,
-                    ),
-                  ),
-                ),
-              ),
-            );
-          }),
-          InkWell(
-            key: const Key('prev-diff'),
-            onTap: () => _openLineListFromDiff(isLeft: true),
-            onLongPress: () {
-              if (viewMode == ViewMode.grouped) {
-                (_groupedKey.currentState as dynamic)?.jumpToTop();
-              } else {
-                _jumpToDocTop();
-              }
-            },
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              child: CustomPaint(
-                size: const Size(37, 26),
-                painter: _BatchExtractIconPainter(
-                  pointLeft: true,
-                  color: IconTheme.of(context).color ??
-                      Theme.of(context).colorScheme.onSurface,
-                ),
-              ),
-            ),
-          ),
-
-          // ===== 分组竖线 =====
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 2),
-            child: Container(
-              width: 1,
-              height: 20,
-              color: Theme.of(context).colorScheme.outlineVariant,
-            ),
-          ),
-          InkWell(
-            key: const Key('next-diff'),
-            onTap: () => _openLineListFromDiff(isLeft: false),
-            onLongPress: () {
-              if (viewMode == ViewMode.grouped) {
-                (_groupedKey.currentState as dynamic)?.jumpToBottom();
-              } else {
-                _jumpToDocBottom();
-              }
-            },
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              child: CustomPaint(
-                size: const Size(37, 26),
-                painter: _BatchExtractIconPainter(
-                  pointLeft: false,
-                  color: IconTheme.of(context).color ??
-                      Theme.of(context).colorScheme.onSurface,
-                ),
-              ),
-            ),
-          ),
-          Builder(builder: (ctx) {
-            final enabled = !_modifiedDeleted &&
-                ref.read(modifiedFilePathProvider) != null;
-            return SizedBox(
-              width: 54,
-              height: 42,
-              child: InkWell(
-                key: const Key('delete-right'),
-                onTap: enabled ? () => _deleteSide(isOriginal: false) : null,
-                child: Center(
-                  child: Text(
-                    '删右',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color:
-                          enabled ? Colors.red : Theme.of(ctx).disabledColor,
-                    ),
-                  ),
-                ),
-              ),
-            );
-          }),
-              ],
-            ),
-          ),
-        ),
-        // 右侧固定：查找 / 更多
-        actions: [
-          IconButton(
-          icon: const Icon(Icons.find_in_page),
-            iconSize: 26,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            tooltip: '查找 / 替换',
-            onPressed: () => setState(() => _showFind = !_showFind),
-          ),
+        // 整条顶栏（含关闭、更多、排序）一起横向滚动，排序按钮藏在最末尾
+        title: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+          // 按钮顺序来自 diffToolbarOrderProvider，可在最右侧排序按钮里调整
+          for (final id in toolbarOrder) ...[
+            _buildToolbarButton(id, diff, viewMode),
+            if (id == 'prevDiff') ...[
+              const SizedBox(width: 1),
+              _buildToolbarDivider(),
+              const SizedBox(width: 1),
+            ] else
+              const SizedBox(width: 2),
+          ],
+          // 更多：随顶栏一起滚动
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert),
             tooltip: '更多操作',
@@ -3156,7 +3238,21 @@ PopupMenuItem<String>(
              
             ],
           ),
-        ],
+          const SizedBox(width: 2),
+          // 排序：放在顶栏最末尾，默认藏在右侧，左滑顶栏才露出
+          IconButton(
+            key: const Key('toolbar-sort'),
+            icon: const Icon(Icons.sort),
+            iconSize: 20,
+            visualDensity: VisualDensity.compact,
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+            tooltip: '排序顶栏按钮',
+            onPressed: _showToolbarSortDialog,
+          ),
+            ],
+          ),
+        ),
       ),
   body: Stack(
   children: [
