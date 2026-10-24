@@ -1823,6 +1823,7 @@ if (!jumped) {
       builder: (c) => StatefulBuilder(
         builder: (c, setDialogState) {
           final defaultMode = ref.read(defaultViewModeProvider);
+          final ctxLines = ref.read(groupedContextLinesProvider).round();
           return SimpleDialog(
             title: const Text('切换视图'),
             children: [
@@ -1854,6 +1855,19 @@ if (!jumped) {
                       Navigator.pop(c);
                     },
                   ),
+              const Divider(height: 1),
+              // 跨行块视图的上下文行数设置（点开底部选择面板）
+              ListTile(
+                leading: const Icon(Icons.view_agenda_outlined, size: 20),
+                title: const Text('跨行块视图 · 上下文行数'),
+                subtitle: Text(
+                  ctxLines == 0 ? '仅显示差异块' : '上下各 $ctxLines 行相同内容',
+                ),
+                onTap: () {
+                  Navigator.pop(c);
+                  _showGroupedContextMenu();
+                },
+              ),
             ],
           );
         },
@@ -2845,14 +2859,28 @@ toolbarHeight: 43,
   ),
   titleSpacing: 0,
         // 中间按钮组放进横向滚动区：屏幕窄时可左右滑动，
-        // 关闭键、查找、更多固定不动。宽屏时右对齐，与改动前一致。
+        // 关闭键、查找、更多固定不动。宽屏时右对齐，与改动前一致；
+        // 窄屏放不下时从最左（⏭）开始显示。
         title: Align(
           alignment: Alignment.centerRight,
           child: SingleChildScrollView(
             scrollDirection: Axis.horizontal,
-            reverse: true,
             child: Row(
               children: [
+          // ⏭ 跳过独有行块（纯增/纯删）
+          Builder(builder: (ctx) {
+            final hasPure = _hasPureBlocks(diff);
+            return IconButton(
+              key: const Key('skip-pure-block'),
+              icon: const Icon(Icons.fast_forward),
+              iconSize: 22,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+              constraints: const BoxConstraints(minWidth: 48, minHeight: 40),
+              tooltip: hasPure ? '跳过独有行块' : '本文档没有独有行',
+              onPressed: hasPure ? _jumpOverPureBlock : null,
+            );
+          }),
           // ===== 左侧组：删左 + 批左 =====
           Builder(builder: (ctx) {
             final enabled = !_originalDeleted &&
@@ -2930,19 +2958,6 @@ toolbarHeight: 43,
               ),
             ),
           ),
-          // ⏭ 跳过独有行块（纯增/纯删）
-          Builder(builder: (ctx) {
-            final hasPure = _hasPureBlocks(diff);
-            return IconButton(
-              key: const Key('skip-pure-block'),
-              icon: const Icon(Icons.fast_forward),
-              iconSize: 22,
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
-              tooltip: hasPure ? '跳过独有行块' : '本文档没有独有行',
-              onPressed: hasPure ? _jumpOverPureBlock : null,
-            );
-          }),
           Builder(builder: (ctx) {
             final enabled = !_modifiedDeleted &&
                 ref.read(modifiedFilePathProvider) != null;
