@@ -27,6 +27,7 @@ import 'browser_settings_screen.dart';
 import 'comparison_settings_screen.dart';
 import 'config_io_service.dart';
 import 'dialogs/directory_picker_dialog.dart';
+import 'dialogs/duplicate_finder_dialog.dart';
 import 'dir_loader.dart';
 import 'file_open_helper.dart';
 import 'line_editor_screen.dart';
@@ -2941,6 +2942,47 @@ Future<void> _startSearch() async {
     _searchResults = List.from(results);
   });
 }
+
+  /// 在当前搜索结果里查找内容完全相同的文件。
+  Future<void> _findDuplicates() async {
+    if (_searching || _selectionMode) return;
+    final files = _searchResults
+        .where((h) => !h.isDir && h.size != null)
+        .toList();
+    if (files.length < 2) return;
+
+    final removed = await showDialog<Set<String>>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => DuplicateFinderDialog(
+        candidates: [
+          for (final h in files)
+            DuplicateCandidate(
+              path: h.path,
+              name: h.name,
+              size: h.size!,
+            ),
+        ],
+      ),
+    );
+    if (!mounted || removed == null || removed.isEmpty) return;
+
+    final anchor = _snapshotVisiblePaths();
+    setState(() {
+      _searchResults = _searchResults
+          .where((h) => !removed.contains(h.path))
+          .toList();
+      // 当前目录的内存列表也同步剔除，退出搜索后不会看到已处理项。
+      _entries = (_entries ?? const <EntryInfo>[])
+          .where((e) => !removed.contains(e.path))
+          .toList();
+    });
+    for (final p in removed) {
+      DirCache.instance.invalidate(File(p).parent.path);
+    }
+    DirCache.instance.invalidate(_currentPath);
+    if (anchor.isNotEmpty) _restoreScrollAnchor(anchor);
+  }
 
   Future<void> _scanDir(
   String dirPath,
@@ -6276,8 +6318,12 @@ Widget _buildExpandedZipBar() {
         ),
       );
     }
+    final fileCount = _searchResults
+        .where((h) => !h.isDir && h.size != null)
+        .length;
+    final canFindDuplicates = !_selectionMode && fileCount >= 2;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
       child: Row(
         children: [
           Expanded(
@@ -6287,6 +6333,15 @@ Widget _buildExpandedZipBar() {
                   : '共找到 ${_searchResults.length} 个',
               style: textTheme.labelSmall,
             ),
+          ),
+          TextButton.icon(
+            style: TextButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+            ),
+            onPressed: canFindDuplicates ? _findDuplicates : null,
+            icon: const Icon(Icons.content_copy, size: 16),
+            label: const Text('查找重复'),
           ),
         ],
       ),
