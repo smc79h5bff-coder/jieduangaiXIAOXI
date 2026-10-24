@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
@@ -244,6 +245,18 @@ class _DuplicateFinderDialogState
           builder: (_) => const DiffViewerScreen(),
         ),
       );
+
+      if (!mounted) return;
+      // 对比页里可能用顶栏删掉某一侧，返回后同步剔除已经不存在的文件。
+      setState(() {
+        for (final f in marks) {
+          if (!File(f.candidate.path).existsSync()) {
+            _removed.add(f.candidate.path);
+            f.markedForCompare = false;
+          }
+        }
+        _pruneGroups();
+      });
     } catch (e) {
       if (!mounted) return;
       Navigator.of(context, rootNavigator: true).pop();
@@ -453,83 +466,102 @@ class _DuplicateFinderDialogState
     if (!mounted) return;
     setState(() {
       _processing = false;
-      // 删完以后重新判断哪些组还剩下多余副本。
-      _groups = _groups
-          .map(
-            (g) => _DupGroup(
-              size: g.size,
-              hash: g.hash,
-              files: g.files
-                  .where((f) => !_removed.contains(f.candidate.path))
-                  .toList(),
-            ),
-          )
-          .where((g) => g.files.length > 1)
-          .toList();
+      // 删完以后重新判断哪些组还剩下多余副本，剩下的组留在弹窗里继续处理。
+      _pruneGroups();
     });
     await _showDone(freed, failures);
-    if (!mounted) return;
-    Navigator.of(context).pop(Set<String>.from(_removed));
+  }
+
+  /// 剔除已删除的文件，并把不足两组副本的分组整体移除。
+  void _pruneGroups() {
+    _groups = _groups
+        .map(
+          (g) => _DupGroup(
+            size: g.size,
+            hash: g.hash,
+            files: g.files
+                .where((f) => !_removed.contains(f.candidate.path))
+                .toList(),
+          ),
+        )
+        .where((g) => g.files.length > 1)
+        .toList();
   }
 
   Future<void> _showDone(int freedBytes, List<String> failures) async {
     await showDialog<void>(
       context: context,
-      barrierDismissible: false,
-      builder: (c) => AlertDialog(
-        insetPadding: _inset,
-        titlePadding: _titlePad,
-        contentPadding: _contentPad,
-        actionsPadding: _actionsPad,
-        title: const Text('完成'),
-        content: SizedBox(
-          width: double.maxFinite,
-          height: MediaQuery.of(c).size.height * 0.5,
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  '已删除 ${_removed.length} 个文件，释放 ${_fmtBytes(freedBytes)}。',
-                ),
-                if (failures.isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  Text(
-                    '${failures.length} 个文件删除失败：',
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 6),
-                  for (final f in failures)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 4),
-                      child: Text(
-                        '· $f',
-                        style: const TextStyle(fontSize: 12),
-                      ),
+      barrierDismissible: true,
+      builder: (c) {
+        // 4 秒自动消失；期间点任意位置也会关闭。
+        Timer(const Duration(seconds: 4), () {
+          if (c.mounted) Navigator.of(c, rootNavigator: true).pop();
+        });
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => Navigator.of(c, rootNavigator: true).pop(),
+          child: AlertDialog(
+            insetPadding: _inset,
+            titlePadding: _titlePad,
+            contentPadding: _contentPad,
+            title: const Text('完成'),
+            content: ConstrainedBox(
+              // 只在失败列表很长时才限制高度，正常情况下随内容收缩。
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(c).size.height * 0.4,
+              ),
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '已删除 ${_removed.length} 个文件，'
+                      '释放 ${_fmtBytes(freedBytes)}。',
                     ),
-                ],
-              ],
+                    if (failures.isNotEmpty) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        '${failures.length} 个文件删除失败：',
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 6),
+                      for (final f in failures)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Text(
+                            '· $f',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                        ),
+                    ],
+                  ],
+                ),
+              ),
             ),
           ),
-        ),
-        actions: [
-          FilledButton(
-            onPressed: () => Navigator.pop(c),
-            child: const Text('确定'),
-          ),
-        ],
-      ),
+        );
+      },
     );
+  }
+
+  /// 关闭弹窗，并把累计删除的路径交回搜索结果页。
+  void _close() {
+    Navigator.of(context).pop(Set<String>.from(_removed));
   }
 
   @override
   Widget build(BuildContext context) {
     return PopScope(
       // 处理过程中不允许返回，否则文件已经动过、页面却拿不到结果。
-      canPop: !_processing,
+      canPop: !_processing && _removed.isEmpty,
       onPopInvokedWithResult: (didPop, _) {
-        if (didPop) _cancelRequested = true;
+        if (didPop) {
+          _cancelRequested = true;
+          return;
+        }
+        if (_processing) return;
+        _close();
       },
       child: AlertDialog(
         insetPadding: _inset,
@@ -539,7 +571,9 @@ class _DuplicateFinderDialogState
         title: Text(_scanning ? '查找重复文件' : '重复文件'),
         content: SizedBox(
           width: double.maxFinite,
-          height: MediaQuery.of(context).size.height * 0.72,
+          height: _scanning || _groups.isNotEmpty
+              ? MediaQuery.of(context).size.height * 0.72
+              : MediaQuery.of(context).size.height * 0.3,
           child: _buildContent(),
         ),
         actions: _buildActions(),
@@ -567,13 +601,24 @@ class _DuplicateFinderDialogState
     }
 
     if (_groups.isEmpty) {
+      final done = _removed.isNotEmpty;
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.check_circle_outline, size: 40),
+            Icon(
+              done ? Icons.task_alt : Icons.check_circle_outline,
+              size: 40,
+            ),
             const SizedBox(height: 12),
-            const Text('没有发现重复文件'),
+            Text(done ? '重复文件已全部处理完' : '没有发现重复文件'),
+            if (done) ...[
+              const SizedBox(height: 8),
+              Text(
+                '本次已删除 ${_removed.length} 个文件',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
             if (_skipped > 0) ...[
               const SizedBox(height: 8),
               Text(
@@ -684,16 +729,17 @@ class _DuplicateFinderDialogState
         !_hasFullySelectedGroup;
     return [
       TextButton(
-        onPressed: _processing
-            ? null
-            : () => Navigator.of(context).pop(const <String>{}),
-        child: const Text('取消'),
+        onPressed: _processing ? null : _close,
+        child: Text(_removed.isEmpty ? '取消' : '关闭'),
       ),
-      TextButton.icon(
-        onPressed:
-            !_processing && _compareMarks.length == 2 ? _openCompare : null,
-        icon: const Icon(Icons.compare_arrows, size: 16),
-        label: const Text('对比'),
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: OutlinedButton.icon(
+          onPressed:
+              !_processing && _compareMarks.length == 2 ? _openCompare : null,
+          icon: const Icon(Icons.compare_arrows, size: 16),
+          label: const Text('对比'),
+        ),
       ),
       FilledButton(
         onPressed: canDelete ? _process : null,
