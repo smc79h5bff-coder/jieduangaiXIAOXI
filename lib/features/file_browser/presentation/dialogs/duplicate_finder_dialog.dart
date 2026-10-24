@@ -26,18 +26,20 @@ class DuplicateCandidate {
 }
 
 class _DupFile {
-  _DupFile(this.candidate);
+  _DupFile(this.candidate, this.hash);
 
   final DuplicateCandidate candidate;
+  final String hash;
 
   /// 默认不勾选，由用户手动选择要删除的文件。
   bool selected = false;
 }
 
 class _DupGroup {
-  _DupGroup({required this.size, required this.files});
+  _DupGroup({required this.size, required this.hash, required this.files});
 
   final int size;
+  final String hash;
   final List<_DupFile> files;
 
   bool get allSelected => files.every((f) => f.selected);
@@ -45,10 +47,35 @@ class _DupGroup {
   String get displayName => files.first.candidate.name;
 }
 
-/// 在 isolate 里流式计算 MD5，避免把整个文件读进主线程内存。
+/// 收集分块哈希算完后的摘要。
+class _DigestSink implements Sink<Digest> {
+  Digest? value;
+
+  @override
+  void add(Digest data) => value = data;
+
+  @override
+  void close() {}
+}
+
+/// 在 isolate 里流式计算 MD5，避免把整个文件读进内存。
+///
+/// 返回 `实际读取字节数|十六进制摘要`。调用方必须核对字节数，
+/// 否则读取不完整/为空时摘要会退化成一个固定值，把不同内容误判成重复。
 Future<String> _md5FileWorker(String path) async {
-  final digest = await md5.bind(File(path).openRead());
-  return digest.toString();
+  final output = _DigestSink();
+  final input = md5.startChunkedConversion(output);
+  var bytes = 0;
+  await for (final chunk in File(path).openRead()) {
+    bytes += chunk.length;
+    input.add(chunk);
+  }
+  input.close();
+  final digest = output.value;
+  if (digest == null) {
+    throw FileSystemException('MD5 计算未产生结果', path);
+  }
+  return '$bytes|$digest';
 }
 
 String _fmtBytes(int bytes) {
@@ -190,8 +217,19 @@ class _DuplicateFinderDialogState extends State<DuplicateFinderDialog> {
           } else if (!File(c.path).existsSync()) {
             skipped++;
           } else {
-            final hash = await compute(_md5FileWorker, c.path);
-            byHash.putIfAbsent(hash, () => <_DupFile>[]).add(_DupFile(c));
+            final raw = await compute(_md5FileWorker, c.path);
+            final sep = raw.indexOf('|');
+            final readBytes = int.parse(raw.substring(0, sep));
+            final hash = raw.substring(sep + 1);
+            if (readBytes != c.size) {
+              // 字节数和搜索结果记录的大小对不上：读到的不是完整文件，
+              // 直接跳过，绝不能拿去分组。
+              skipped++;
+            } else {
+              byHash
+                  .putIfAbsent(hash, () => <_DupFile>[])
+                  .add(_DupFile(c, hash));
+            }
           }
         } catch (_) {
           // 权限不足 / 文件被占用 / 读取中途失败：跳过，不中断整体流程。
@@ -221,7 +259,13 @@ class _DuplicateFinderDialogState extends State<DuplicateFinderDialog> {
         if (len != 0) return len;
         return a.candidate.path.compareTo(b.candidate.path);
       });
-      groups.add(_DupGroup(size: list.first.candidate.size, files: list));
+      groups.add(
+        _DupGroup(
+          size: list.first.candidate.size,
+          hash: list.first.hash,
+          files: list,
+        ),
+      );
     }
     groups.sort((a, b) {
       final n = b.files.length.compareTo(a.files.length);
@@ -318,6 +362,7 @@ class _DuplicateFinderDialogState extends State<DuplicateFinderDialog> {
           .map(
             (g) => _DupGroup(
               size: g.size,
+              hash: g.hash,
               files: g.files
                   .where((f) => !_removed.contains(f.candidate.path))
                   .toList(),
@@ -566,8 +611,9 @@ class _DuplicateFinderDialogState extends State<DuplicateFinderDialog> {
                   const BorderRadius.vertical(top: Radius.circular(7)),
             ),
             child: Text(
-              '组 ${index + 1} · ${group.displayName} · '
-              '${group.files.length} 份 · ${_fmtBytes(group.size)}',
+              '组 ${index + 1} · ${group.files.length} 份 · '
+              '${_fmtBytes(group.size)} · MD5 ${group.hash.substring(0, 8)} · '
+              '${group.displayName}',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
@@ -585,6 +631,7 @@ class _DuplicateFinderDialogState extends State<DuplicateFinderDialog> {
       child: Padding(
         padding: const EdgeInsets.only(left: 2, right: 6, top: 1, bottom: 1),
         child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Checkbox(
               value: file.selected,
@@ -593,11 +640,12 @@ class _DuplicateFinderDialogState extends State<DuplicateFinderDialog> {
                   _processing ? null : (v) => _toggleDelete(file, v ?? false),
             ),
             Expanded(
-              child: Text(
-                file.candidate.path,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 12),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                child: Text(
+                  file.candidate.path,
+                  style: const TextStyle(fontSize: 12),
+                ),
               ),
             ),
           ],
