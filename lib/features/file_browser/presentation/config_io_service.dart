@@ -20,21 +20,19 @@ class ConfigIoService {
 
   /// 永远不导出、不导入的 key。
   ///
-  /// 分三类：
-  ///   1. 设备 / 路径相关（换设备没意义）
-  ///   2. 历史记录（跟当前文档相关，换设备没意义）
-  ///   3. 按钮颜色（有意跳过，避免 key 名不一致引发的问题）
+  /// 只跳「自动记录、换设备或重装无意义」的易失状态：
+  ///   1. 上次所在目录
+  ///   2. 最近移动目标
+  ///   3. 查找位置、搜索关键词等历史
+  ///
+  /// 其余用户配置（排序、搜索范围、自定义搜索目录、收藏目录、
+  /// 按钮颜色等）一律导出：它们都是用户攒下来的设置，重装后
+  /// 手动重建很麻烦。
   static const Set<String> _skipKeys = {
     'jianming.browser.lastPath',
-    'jianming.browser.favorites',
-    'jianming.browser.searchFolders',
-    'jianming.browser.searchScope',
-    'jianming.browser.sortField',
     'jianming.browser.recentMoveTargets',
-    'jianming.browser.sortAsc',
     'jianming.viewer.findHistory',
     'jianming.browser.searchHistory',
-    'jianming.toolbar.colors',
   };
 
   /// 导出配置。返回 true 表示保存成功，false 表示用户取消。
