@@ -35,20 +35,18 @@ const Color _kConnectorColor = Color(0xFFBDBDBD);
 
 // ==================== 页面 ====================
 
-/// 逐行编辑器：每一行是一个独立的单行输入框。
-///
-/// 因为每行高度固定、永远不会折行，行号 / 方块 / 高亮不会错位。
-/// 长行只横向滚到 3 屏为止，后面的内容裁掉不再显示（内容本身不丢，
-/// 删除时仍按完整行匹配）。
-class LineByLineEditorPage extends ConsumerStatefulWidget {
-  const LineByLineEditorPage({super.key});
+/// 行编辑器 3（绘制版）：正文仍是虚拟化列表，行号栏和方块改为在
+/// 绘制阶段读取真实滚动偏移来画，所以永远不会和正文错位。
+/// 这是独立的第三个编辑器，效果不满意可以直接删掉本文件。
+class LinePainterEditorPage extends ConsumerStatefulWidget {
+  const LinePainterEditorPage({super.key});
 
   @override
-  ConsumerState<LineByLineEditorPage> createState() =>
-      _LineByLineEditorPageState();
+  ConsumerState<LinePainterEditorPage> createState() =>
+      _LinePainterEditorPageState();
 }
 
-class _LineByLineEditorPageState extends ConsumerState<LineByLineEditorPage> {
+class _LinePainterEditorPageState extends ConsumerState<LinePainterEditorPage> {
   late List<String> _lines;
 
   final Set<int> _selectedLines = <int>{};
@@ -80,7 +78,7 @@ class _LineByLineEditorPageState extends ConsumerState<LineByLineEditorPage> {
     final text = ref.read(lineListTextProvider);
     _lines = text.split('\n');
     if (_lines.isEmpty) _lines = <String>[''];
-    _vertCtrl = ScrollController()..addListener(_onScroll);
+    _vertCtrl = ScrollController();
   }
 
   @override
@@ -105,7 +103,6 @@ class _LineByLineEditorPageState extends ConsumerState<LineByLineEditorPage> {
     _syncTimer?.cancel();
     _shrinkTimer?.cancel();
     _backspaceRepeatTimer?.cancel();
-    _vertCtrl.removeListener(_onScroll);
     _vertCtrl.dispose();
     _activeFocus.dispose();
     _activeCtrl.dispose();
@@ -540,13 +537,36 @@ class _LineByLineEditorPageState extends ConsumerState<LineByLineEditorPage> {
     );
   }
 
-  Future<void> _copyAll() async {
+  /// 工具栏「回车」：和软键盘回车一致——在光标处把当前行拆成两行。
+  /// 没有激活行时，在末尾新增一空行并进入编辑模式。
+  void _enterKey() {
+    if (_activeLine != null) {
+      _splitActiveLine();
+      return;
+    }
+    final newIndex = _lines.length;
+    setState(() {
+      _lines.add('');
+      _editMode = true;
+      _activeLine = newIndex;
+      _selectedLines.clear();
+      _anchorLine = null;
+      _activeCtrl.value = const TextEditingValue(
+        text: '',
+        selection: TextSelection.collapsed(offset: 0),
+      );
+    });
+    _syncNow();
+    _scrollToLine(newIndex);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _activeLine == newIndex) _activeFocus.requestFocus();
+    });
+  }
+
+  void _closePage() {
     _saveActiveText();
-    await Clipboard.setData(ClipboardData(text: _lines.join('\n')));
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('已复制全部 ${_lineCount} 行')),
-    );
+    _syncNow();
+    Navigator.of(context).pop();
   }
 
   void _deleteSelected() {
@@ -676,7 +696,6 @@ class _LineByLineEditorPageState extends ConsumerState<LineByLineEditorPage> {
   }
 
   Widget _buildEditorArea(double maxHeight) {
-    final offset = _vertCtrl.hasClients ? _vertCtrl.offset : 0.0;
     return Container(
       margin: const EdgeInsets.fromLTRB(1, 6, 1, 0),
       decoration: BoxDecoration(
@@ -686,8 +705,51 @@ class _LineByLineEditorPageState extends ConsumerState<LineByLineEditorPage> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          _buildBlockArea(maxHeight, offset),
-          _buildGutter(maxHeight, offset),
+          // 方块栏：绘制阶段读真实滚动偏移，永不错位。
+          SizedBox(
+            width: _kBlockAreaWidth,
+            child: ClipRect(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTapUp: (d) => _onBlockTap(d.localPosition),
+                onLongPressStart: (d) => _onBlockLongPress(d.localPosition),
+                child: CustomPaint(
+                  painter: _BlockLayerPainter(
+                    repaint: _vertCtrl,
+                    offsetGetter: _verticalOffset,
+                    lineCount: _lineCount,
+                    rowHeight: _rowHeight,
+                    vpad: _vpad,
+                    selectedLines: _selectedLines,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          // 行号栏：同上，绘制阶段读偏移。
+          SizedBox(
+            width: _kGutterWidth,
+            child: ColoredBox(
+              color: Colors.grey.shade50,
+              child: ClipRect(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTapUp: (d) => _onGutterTap(d.localPosition),
+                  onLongPressStart: (d) => _onGutterLongPress(d.localPosition),
+                  child: CustomPaint(
+                    painter: _GutterLayerPainter(
+                      repaint: _vertCtrl,
+                      offsetGetter: _verticalOffset,
+                      lineCount: _lineCount,
+                      rowHeight: _rowHeight,
+                      scale: _scale,
+                      selectedLines: _selectedLines,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
           Container(width: 1, color: Colors.grey.shade300),
           Expanded(child: _buildTextColumn(maxHeight)),
         ],
@@ -695,173 +757,41 @@ class _LineByLineEditorPageState extends ConsumerState<LineByLineEditorPage> {
     );
   }
 
-  int _firstVisible(double offset) {
-    final n = ((offset - _vpad) / _rowHeight).floor();
-    if (n < 0) return 0;
-    if (n > _lineCount - 1) return _lineCount - 1;
+  /// 真实滚动偏移：绘制/点击时调用，拿到的一定是布局夹紧后的值。
+  double _verticalOffset() =>
+      _vertCtrl.hasClients ? _vertCtrl.offset : 0.0;
+
+  int? _lineAtY(double localY) {
+    final offset = _verticalOffset();
+    final n = ((localY + offset - _vpad) / _rowHeight).floor();
+    if (n < 0 || n > _lineCount - 1) return null;
     return n;
   }
 
-  int _lastVisible(double offset, double maxHeight) {
-    final n = ((offset + maxHeight - _vpad) / _rowHeight).ceil();
-    if (n < 0) return 0;
-    if (n > _lineCount - 1) return _lineCount - 1;
-    return n;
-  }
-
-  Widget _buildBlockArea(double maxHeight, double scrollOffset) {
-    final first = _firstVisible(scrollOffset);
-    final last = _lastVisible(scrollOffset, maxHeight);
-    return SizedBox(
-      width: _kBlockAreaWidth,
-      child: ClipRect(
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            CustomPaint(
-              size: Size(_kBlockAreaWidth, maxHeight),
-              painter: _RowConnectorPainter(
-                first: first,
-                last: last,
-                rowHeight: _rowHeight,
-                vpad: _vpad,
-                scrollOffset: scrollOffset,
-                selectedLines: _selectedLines,
-              ),
-            ),
-            for (var i = first; i <= last; i++)
-              _buildBlock(i, maxHeight, scrollOffset),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildBlock(int i, double maxHeight, double scrollOffset) {
-    final top =
-        _vpad + i * _rowHeight + _rowHeight / 2 - _kBlockSize / 2 - scrollOffset;
-    if (top + _kBlockSize < 0 || top > maxHeight) {
-      return const SizedBox.shrink();
-    }
-
+  void _onBlockTap(Offset p) {
+    final i = _lineAtY(p.dy);
+    if (i == null) return;
     final left = i.isEven ? 0.0 : _kBlockOffset;
-    final selected = _selectedLines.contains(i);
-
-    return Positioned(
-      left: left,
-      top: top,
-      width: _kBlockSize,
-      height: _kBlockSize,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => _toggleLine(i),
-        onLongPress: () => _rangeSelect(i),
-        child: Container(
-          decoration: BoxDecoration(
-            color: selected ? _kCheckColor : _kBlockBgNormal,
-            borderRadius: BorderRadius.circular(4),
-            border: Border.all(
-              color: selected ? _kCheckColor : _kBlockBorderNormal,
-              width: selected ? 2 : 1,
-            ),
-          ),
-          alignment: Alignment.center,
-          child: Text(
-            '${i + 1}',
-            style: TextStyle(
-              fontSize: 12,
-              fontFamily: 'monospace',
-              fontWeight: FontWeight.bold,
-              color: selected ? Colors.white : _kBlockTextNormal,
-            ),
-          ),
-        ),
-      ),
-    );
+    if (p.dx < left || p.dx > left + _kBlockSize) return;
+    _toggleLine(i);
   }
 
-  Widget _buildGutter(double maxHeight, double scrollOffset) {
-    final first = _firstVisible(scrollOffset);
-    final last = _lastVisible(scrollOffset, maxHeight);
-    return SizedBox(
-      width: _kGutterWidth,
-      child: ColoredBox(
-        color: Colors.grey.shade50,
-        child: ClipRect(
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              for (var i = first; i <= last; i++)
-                _buildGutterRow(i, maxHeight, scrollOffset),
-            ],
-          ),
-        ),
-      ),
-    );
+  void _onBlockLongPress(Offset p) {
+    final i = _lineAtY(p.dy);
+    if (i == null) return;
+    final left = i.isEven ? 0.0 : _kBlockOffset;
+    if (p.dx < left || p.dx > left + _kBlockSize) return;
+    _rangeSelect(i);
   }
 
-  Widget _buildGutterRow(int i, double maxHeight, double scrollOffset) {
-    final top = _vpad + i * _rowHeight - scrollOffset;
-    if (top + _rowHeight < 0 || top > maxHeight) {
-      return const SizedBox.shrink();
-    }
-    final selected = _selectedLines.contains(i);
-    return Positioned(
-      top: top,
-      left: 0,
-      right: 0,
-      height: _rowHeight,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => _toggleLine(i),
-        onLongPress: () => _rangeSelect(i),
-        child: ColoredBox(
-          color: selected ? _kSelectedBg : Colors.transparent,
-          child: Padding(
-            padding: const EdgeInsets.only(left: 0, right: 1),
-            child: Row(
-              children: [
-                _buildCheckbox(selected),
-                const SizedBox(width: 1),
-                Expanded(
-                  child: Text(
-                    '${i + 1}',
-                    textAlign: TextAlign.right,
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontFamily: 'monospace',
-                      color:
-                          selected ? _kLineNumSelected : _kLineNumNormal,
-                      fontWeight: selected ? FontWeight.bold : FontWeight.normal,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
+  void _onGutterTap(Offset p) {
+    final i = _lineAtY(p.dy);
+    if (i != null) _toggleLine(i);
   }
 
-  Widget _buildCheckbox(bool selected) {
-    return SizedBox(
-      width: 14,
-      height: 14,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: selected ? _kCheckColor : Colors.transparent,
-          border: Border.all(
-            color: selected ? _kCheckColor : Colors.grey.shade400,
-            width: 1.5,
-          ),
-          borderRadius: BorderRadius.circular(2),
-        ),
-        child: selected
-            ? const Icon(Icons.check, size: 10, color: Colors.white)
-            : null,
-      ),
-    );
+  void _onGutterLongPress(Offset p) {
+    final i = _lineAtY(p.dy);
+    if (i != null) _rangeSelect(i);
   }
 
   // ---------- 逐行编辑区 ----------
@@ -961,10 +891,6 @@ class _LineByLineEditorPageState extends ConsumerState<LineByLineEditorPage> {
     );
   }
 
-  void _onScroll() {
-    if (mounted) setState(() {});
-  }
-
   // ---------- 工具条（三排，无悬浮按钮） ----------
 
   Widget _buildToolbar() {
@@ -1060,12 +986,19 @@ class _LineByLineEditorPageState extends ConsumerState<LineByLineEditorPage> {
             ),
             Expanded(
               child: _toolBtn(
-                icon: Icons.content_copy,
-                label: '复制全部',
-                onTap: _copyAll,
+                icon: Icons.keyboard_return,
+                label: '回车',
+                onTap: _enterKey,
               ),
             ),
-            const Expanded(child: SizedBox.shrink()),
+            Expanded(
+              child: _toolBtn(
+                icon: Icons.close,
+                label: '关闭',
+                onTap: _closePage,
+                colorOverride: Colors.red,
+              ),
+            ),
           ],
         ),
       ],
@@ -1078,10 +1011,12 @@ class _LineByLineEditorPageState extends ConsumerState<LineByLineEditorPage> {
     required VoidCallback? onTap,
     VoidCallback? onLongPress,
     VoidCallback? onLongPressEnd,
+    Color? colorOverride,
   }) {
     final enabled = onTap != null || onLongPress != null;
     final s = Theme.of(context).colorScheme;
-    final color = enabled ? s.onSurface : s.onSurface.withOpacity(0.3);
+    final color = colorOverride ??
+        (enabled ? s.onSurface : s.onSurface.withOpacity(0.3));
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
@@ -1115,62 +1050,209 @@ class _LineByLineEditorPageState extends ConsumerState<LineByLineEditorPage> {
   }
 }
 
-// ==================== 连接线 ====================
+// ==================== 绘制层 ====================
+//
+// 这两层在 paint() 里才读取滚动偏移。paint 发生在 layout 之后，
+// 所以拿到的永远是布局夹紧后的真实值，和正文不可能错位。
 
-class _RowConnectorPainter extends CustomPainter {
-  _RowConnectorPainter({
-    required this.first,
-    required this.last,
+/// 计算当前可见的行号区间。
+int _firstVisibleLine(double offset, double vpad, double rowHeight) {
+  final n = ((offset - vpad) / rowHeight).floor();
+  return n < 0 ? 0 : n;
+}
+
+int _lastVisibleLine(
+  double offset,
+  double sizeHeight,
+  double vpad,
+  double rowHeight,
+  int lineCount,
+) {
+  final n = ((offset + sizeHeight - vpad) / rowHeight).ceil();
+  return n > lineCount - 1 ? lineCount - 1 : n;
+}
+
+class _BlockLayerPainter extends CustomPainter {
+  _BlockLayerPainter({
+    required Listenable repaint,
+    required this.offsetGetter,
+    required this.lineCount,
     required this.rowHeight,
     required this.vpad,
-    required this.scrollOffset,
+    required this.scale,
     required this.selectedLines,
-  });
+  }) : super(repaint: repaint);
 
-  final int first;
-  final int last;
+  final double Function() offsetGetter;
+  final int lineCount;
   final double rowHeight;
   final double vpad;
-  final double scrollOffset;
+  final double scale;
   final Set<int> selectedLines;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paintNormal = Paint()
+    if (lineCount <= 0 || size.height <= 0) return;
+    final offset = offsetGetter();
+    final first = _firstVisibleLine(offset, vpad, rowHeight);
+    final last =
+        _lastVisibleLine(offset, size.height, vpad, rowHeight, lineCount);
+
+    final lineNormal = Paint()
       ..color = _kConnectorColor
       ..strokeWidth = 1.5
       ..style = PaintingStyle.stroke;
-    final paintSelected = Paint()
+    final lineSelected = Paint()
       ..color = _kCheckColor
       ..strokeWidth = 2.5
       ..style = PaintingStyle.stroke;
 
     for (var i = first; i <= last; i++) {
-      final centerY = vpad + i * rowHeight + rowHeight / 2 - scrollOffset;
-      if (centerY < -20 || centerY > size.height + 20) continue;
-
-      final blockLeft = i.isEven ? 0.0 : _kBlockOffset;
-      final blockCenterX = blockLeft + _kBlockSize / 2;
+      final top = vpad + i * rowHeight - offset;
+      if (top + rowHeight <= 0 || top >= size.height) continue;
+      final centerY = top + rowHeight / 2;
+      final left = i.isEven ? 0.0 : _kBlockOffset;
       final selected = selectedLines.contains(i);
 
       canvas.drawLine(
-        Offset(blockCenterX, centerY),
+        Offset(left + _kBlockSize / 2, centerY),
         Offset(size.width, centerY),
-        selected ? paintSelected : paintNormal,
+        selected ? lineSelected : lineNormal,
       );
+
+      final rect = Rect.fromLTWH(
+        left,
+        centerY - _kBlockSize / 2,
+        _kBlockSize,
+        _kBlockSize,
+      );
+      final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(4));
+      canvas.drawRRect(
+        rrect,
+        Paint()..color = selected ? _kCheckColor : _kBlockBgNormal,
+      );
+      canvas.drawRRect(
+        rrect,
+        Paint()
+          ..color = selected ? _kCheckColor : _kBlockBorderNormal
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = selected ? 2 : 1,
+      );
+
+      final tp = TextPainter(
+        text: TextSpan(
+          text: '${i + 1}',
+          style: TextStyle(
+            fontSize: 12 * scale,
+            fontFamily: 'monospace',
+            fontWeight: FontWeight.bold,
+            color: selected ? Colors.white : _kBlockTextNormal,
+            height: 1.0,
+          ),
+        ),
+        textAlign: TextAlign.center,
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+        ellipsis: '…',
+      )..layout(maxWidth: _kBlockSize);
+      tp.paint(canvas, Offset(rect.left, rect.top + (_kBlockSize - tp.height) / 2));
     }
   }
 
   @override
-  bool shouldRepaint(_RowConnectorPainter old) {
-    if (old.first != first || old.last != last) return true;
-    if (old.rowHeight != rowHeight) return true;
-    if (old.vpad != vpad) return true;
-    if (old.scrollOffset != scrollOffset) return true;
-    if (old.selectedLines.length != selectedLines.length) return true;
-    for (final i in selectedLines) {
-      if (!old.selectedLines.contains(i)) return true;
+  bool shouldRepaint(_BlockLayerPainter old) => true;
+}
+
+class _GutterLayerPainter extends CustomPainter {
+  _GutterLayerPainter({
+    required Listenable repaint,
+    required this.offsetGetter,
+    required this.lineCount,
+    required this.rowHeight,
+    required this.vpad,
+    required this.scale,
+    required this.selectedLines,
+  }) : super(repaint: repaint);
+
+  final double Function() offsetGetter;
+  final int lineCount;
+  final double rowHeight;
+  final double vpad;
+  final double scale;
+  final Set<int> selectedLines;
+
+  static const double _checkSize = 14.0;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (lineCount <= 0 || size.height <= 0) return;
+    final offset = offsetGetter();
+    final first = _firstVisibleLine(offset, vpad, rowHeight);
+    final last =
+        _lastVisibleLine(offset, size.height, vpad, rowHeight, lineCount);
+
+    for (var i = first; i <= last; i++) {
+      final top = vpad + i * rowHeight - offset;
+      if (top + rowHeight <= 0 || top >= size.height) continue;
+      final selected = selectedLines.contains(i);
+
+      if (selected) {
+        canvas.drawRect(
+          Rect.fromLTWH(0, top, size.width, rowHeight),
+          Paint()..color = _kSelectedBg,
+        );
+      }
+
+      final cbTop = top + (rowHeight - _checkSize) / 2;
+      final cbRect = Rect.fromLTWH(0, cbTop, _checkSize, _checkSize);
+      final cbRRect =
+          RRect.fromRectAndRadius(cbRect, const Radius.circular(2));
+      if (selected) {
+        canvas.drawRRect(cbRRect, Paint()..color = _kCheckColor);
+        final path = Path()
+          ..moveTo(cbRect.left + 3.5, cbRect.top + 7)
+          ..lineTo(cbRect.left + 6, cbRect.top + 9.5)
+          ..lineTo(cbRect.left + 10.5, cbRect.top + 4.5);
+        canvas.drawPath(
+          path,
+          Paint()
+            ..color = Colors.white
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.5
+            ..strokeCap = StrokeCap.round
+            ..strokeJoin = StrokeJoin.round,
+        );
+      } else {
+        canvas.drawRRect(
+          cbRRect,
+          Paint()
+            ..color = Colors.grey.shade400
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.5,
+        );
+      }
+
+      final leftPad = _checkSize + 1;
+      final numWidth = size.width - leftPad - 1;
+      final tp = TextPainter(
+        text: TextSpan(
+          text: '${i + 1}',
+          style: TextStyle(
+            fontSize: 11 * scale,
+            fontFamily: 'monospace',
+            color: selected ? _kLineNumSelected : _kLineNumNormal,
+            fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+            height: 1.0,
+          ),
+        ),
+        textAlign: TextAlign.right,
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+      )..layout(maxWidth: numWidth);
+      tp.paint(canvas, Offset(leftPad, top + (rowHeight - tp.height) / 2));
     }
-    return false;
   }
+
+  @override
+  bool shouldRepaint(_GutterLayerPainter old) => true;
 }
