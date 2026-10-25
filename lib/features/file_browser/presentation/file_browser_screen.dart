@@ -3937,7 +3937,7 @@ Future<void> _showDirInfoDialog() async {
                     contentPadding: EdgeInsets.zero,
                     leading: Icon(
                       isFav ? Icons.star : Icons.star_border,
-                      color: isFav ? Colors.amber : null,
+                      color: isFav ? const Color(0xFFACF500) : null,
                     ),
                     title: Text(
   isFav ? '取消收藏当前目录' : '收藏当前目录',
@@ -9326,8 +9326,8 @@ class _FileBookmarksDialogState
                       : isDir
                           ? Icon(Icons.folder,
                               size: 20, color: Colors.amber.shade600)
-                          : Icon(Icons.insert_drive_file_outlined,
-                              size: 20, color: Colors.blue.shade600);
+                          // 普通文件不显示类型图标，留出同宽空位保持文字对齐。
+                          : const SizedBox(width: 20);
                   return ListTile(
                     dense: true,
                     minLeadingWidth: _selectionMode ? 0 : 24,
