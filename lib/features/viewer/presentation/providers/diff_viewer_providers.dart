@@ -31,8 +31,9 @@ class DefaultViewModeNotifier extends EnumPrefNotifier<ViewMode> {
 }
 
 /// 批处理（行清单）打开时使用哪个编辑器。
-/// text = 旧的整段文本编辑器；line = 新的逐行编辑器。
-enum LineListEditorMode { text, line }
+/// text = 旧的整段文本编辑器；line = 逐行编辑器；
+/// linePainter = 行编辑器3（行号栏在绘制阶段跟随滚动，永不与正文错位）。
+enum LineListEditorMode { text, line, linePainter }
 
 final lineListEditorModeProvider =
     NotifierProvider<LineListEditorModeNotifier, LineListEditorMode>(
