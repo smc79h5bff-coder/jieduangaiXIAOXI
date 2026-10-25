@@ -303,6 +303,54 @@ class DisplaySettingsSheet extends ConsumerWidget {
                       ),
                     ),
 
+                    // ========== 批处理编辑器 ==========
+                    const Divider(height: 32),
+                    Text(
+                      '批处理编辑器',
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                    const SizedBox(height: 4),
+                    Builder(
+                      builder: (context) {
+                        final mode = ref.watch(lineListEditorModeProvider);
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            SegmentedButton<LineListEditorMode>(
+                              showSelectedIcon: false,
+                              style: const ButtonStyle(
+                                visualDensity: VisualDensity.compact,
+                              ),
+                              segments: const [
+                                ButtonSegment(
+                                  value: LineListEditorMode.text,
+                                  label: Text('文本编辑器'),
+                                ),
+                                ButtonSegment(
+                                  value: LineListEditorMode.line,
+                                  label: Text('行编辑器'),
+                                ),
+                              ],
+                              selected: {mode},
+                              onSelectionChanged: (sel) => ref
+                                  .read(lineListEditorModeProvider.notifier)
+                                  .update(sel.first),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '决定对比页顶栏「批左 / 批右」和查找面板的批处理按钮打开哪个编辑器。'
+                              '行编辑器每行独立，绝不折行，行号永远对齐。',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color:
+                                    Theme.of(context).colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+
                     // ========== 悬浮下翻页按钮 ==========
                     const Divider(height: 32),
                     Text(
