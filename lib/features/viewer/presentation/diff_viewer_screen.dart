@@ -29,6 +29,7 @@ import 'diff_text_index.dart';
 import 'grouped_diff_view.dart';
 import 'line_list_page.dart';
 import 'line_by_line_editor_page.dart';
+import 'line_painter_editor_page.dart';
 import 'line_height_cache.dart';
 import 'line_height_calculator.dart';
 import 'providers/diff_viewer_providers.dart';
@@ -2050,13 +2051,15 @@ if (!jumped) {
       ref.read(lineListTextProvider.notifier).state = merged;
     }
     if (!mounted) return;
-    final useLineEditor =
-        ref.read(lineListEditorModeProvider) == LineListEditorMode.line;
+    final editorMode = ref.read(lineListEditorModeProvider);
+    final Widget editorPage = switch (editorMode) {
+      LineListEditorMode.text => const LineListPage(),
+      LineListEditorMode.line => const LineByLineEditorPage(),
+      LineListEditorMode.linePainter => const LinePainterEditorPage(),
+    };
     await Navigator.of(context).push(
       PageRouteBuilder(
-        pageBuilder: (_, __, ___) => useLineEditor
-            ? const LineByLineEditorPage()
-            : const LineListPage(),
+        pageBuilder: (_, __, ___) => editorPage,
         transitionDuration: Duration.zero,
         reverseTransitionDuration: Duration.zero,
       ),
