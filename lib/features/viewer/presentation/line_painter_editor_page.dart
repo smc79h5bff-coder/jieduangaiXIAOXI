@@ -420,8 +420,15 @@ class _LinePainterEditorPageState extends ConsumerState<LinePainterEditorPage> {
   void _scrollToLine(int i) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_vertCtrl.hasClients) return;
-      final target = _vpad + i * _rowHeight - _rowHeight * 2;
-      final max = _vertCtrl.position.maxScrollExtent;
+      final pos = _vertCtrl.position;
+      final lineTop = _vpad + i * _rowHeight;
+      final lineBottom = lineTop + _rowHeight;
+      final viewTop = pos.pixels;
+      final viewBottom = pos.pixels + pos.viewportDimension;
+      // 目标行已经完整可见就完全不动，避免按回车时页面乱跳。
+      if (lineTop >= viewTop && lineBottom <= viewBottom) return;
+      final target = lineTop - _rowHeight * 2;
+      final max = pos.maxScrollExtent;
       _vertCtrl.jumpTo(target < 0 ? 0.0 : (target > max ? max : target));
     });
   }
@@ -1152,12 +1159,17 @@ class _BlockLayerPainter extends CustomPainter {
             height: 1.0,
           ),
         ),
-        textAlign: TextAlign.center,
         textDirection: TextDirection.ltr,
         maxLines: 1,
-        ellipsis: '…',
-      )..layout(maxWidth: _kBlockSize);
-      tp.paint(canvas, Offset(rect.left, rect.top + (_kBlockSize - tp.height) / 2));
+      )..layout();
+      // 自己算居中，不依赖 TextAlign，避免数字贴着方块左边缘。
+      tp.paint(
+        canvas,
+        Offset(
+          rect.center.dx - tp.width / 2,
+          rect.top + (_kBlockSize - tp.height) / 2,
+        ),
+      );
     }
   }
 
@@ -1235,7 +1247,6 @@ class _GutterLayerPainter extends CustomPainter {
       }
 
       final leftPad = _checkSize + 1;
-      final numWidth = size.width - leftPad - 1;
       final tp = TextPainter(
         text: TextSpan(
           text: '${i + 1}',
@@ -1247,11 +1258,18 @@ class _GutterLayerPainter extends CustomPainter {
             height: 1.0,
           ),
         ),
-        textAlign: TextAlign.right,
         textDirection: TextDirection.ltr,
         maxLines: 1,
-      )..layout(maxWidth: numWidth);
-      tp.paint(canvas, Offset(leftPad, top + (rowHeight - tp.height) / 2));
+      )..layout();
+      // 右对齐到边长减 1，和旧编辑器的行号位置一致。
+      final x = size.width - 1 - tp.width;
+      tp.paint(
+        canvas,
+        Offset(
+          x < leftPad ? leftPad : x,
+          top + (rowHeight - tp.height) / 2,
+        ),
+      );
     }
   }
 
