@@ -28,6 +28,7 @@ import 'diagnostic_screen.dart';
 import 'diff_text_index.dart';
 import 'grouped_diff_view.dart';
 import 'line_list_page.dart';
+import 'line_by_line_editor_page.dart';
 import 'line_height_cache.dart';
 import 'line_height_calculator.dart';
 import 'providers/diff_viewer_providers.dart';
@@ -2018,45 +2019,49 @@ if (!jumped) {
 
     return (left: leftParts, right: rightParts);
   }
-Future<void> _openLineListFromDiff({required bool isLeft}) async {
-  final diff = _diff;
-  if (diff == null) {
-    _toast('还没有差异可列出');
-    return;
-  }
-  final parts = _collectDiffParts(diff);
-  final list = isLeft ? parts.left : parts.right;
-  if (list.isEmpty) {
-    _toast(isLeft ? '左侧没有差异' : '右侧没有差异');
-    return;
-  }
-  await _openLineList(appendLines: list);
-}
-
-Future<void> _openLineList({List<String>? appendLines}) async {
-  if (appendLines != null && appendLines.isNotEmpty) {
-    final cur = ref.read(lineListTextProvider);
-    final existing = cur.isEmpty ? <String>[] : cur.split('\n');
-    final existingSet = existing.where((l) => l.isNotEmpty).toSet();
-    final added = <String>[];
-    for (final l in appendLines) {
-      if (l.isEmpty) continue;
-      if (existingSet.contains(l)) continue;
-      existingSet.add(l);
-      added.add(l);
+  Future<void> _openLineListFromDiff({required bool isLeft}) async {
+    final diff = _diff;
+    if (diff == null) {
+      _toast('还没有差异可列出');
+      return;
     }
-    final merged = [...existing, ...added].join('\n');
-    ref.read(lineListTextProvider.notifier).state = merged;
+    final parts = _collectDiffParts(diff);
+    final list = isLeft ? parts.left : parts.right;
+    if (list.isEmpty) {
+      _toast(isLeft ? '左侧没有差异' : '右侧没有差异');
+      return;
+    }
+    await _openLineList(appendLines: list);
   }
-   if (!mounted) return;
-  await Navigator.of(context).push(
-    PageRouteBuilder(
-      pageBuilder: (_, __, ___) => const LineListPage(),
-      transitionDuration: Duration.zero,
-      reverseTransitionDuration: Duration.zero,
-    ),
-  );
-}
+
+  Future<void> _openLineList({List<String>? appendLines}) async {
+    if (appendLines != null && appendLines.isNotEmpty) {
+      final cur = ref.read(lineListTextProvider);
+      final existing = cur.isEmpty ? <String>[] : cur.split('\n');
+      final existingSet = existing.where((l) => l.isNotEmpty).toSet();
+      final added = <String>[];
+      for (final l in appendLines) {
+        if (l.isEmpty) continue;
+        if (existingSet.contains(l)) continue;
+        existingSet.add(l);
+        added.add(l);
+      }
+      final merged = [...existing, ...added].join('\n');
+      ref.read(lineListTextProvider.notifier).state = merged;
+    }
+    if (!mounted) return;
+    final useLineEditor =
+        ref.read(lineListEditorModeProvider) == LineListEditorMode.line;
+    await Navigator.of(context).push(
+      PageRouteBuilder(
+        pageBuilder: (_, __, ___) => useLineEditor
+            ? const LineByLineEditorPage()
+            : const LineListPage(),
+        transitionDuration: Duration.zero,
+        reverseTransitionDuration: Duration.zero,
+      ),
+    );
+  }
   Future<void> _exportDiff() async {
     final diff = _diff;
     if (diff == null) return;
