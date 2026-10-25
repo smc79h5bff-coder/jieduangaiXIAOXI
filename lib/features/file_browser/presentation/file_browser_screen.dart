@@ -1128,6 +1128,10 @@ void dispose() {
     if (_searchActive) {
       for (final hit in _searchResults) {
         final isZip = _isExpandableArchiveName(hit.name);
+		  // 原来：
+
+// 改成：
+final isZip = !hit.isDir && _isExpandableArchiveName(hit.name);
         final key = hit.path;
        out.add(_DisplayItem(
   key: key,
