@@ -147,6 +147,73 @@ Future<Uint8List> _folderListingWorker(String rootPath) async {
   return builder.takeBytes();
 }
 
+/// 菜单「已收藏的文件」用的原创线稿图标：左侧清单 + 右侧加宽书签。
+/// 按 24×24 坐标系绘制，颜色跟随菜单的 IconTheme，禁用时自动变灰。
+class _SavedFilesListIcon extends StatelessWidget {
+  const _SavedFilesListIcon({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = IconTheme.of(context).color ??
+        Theme.of(context).colorScheme.onSurface;
+    return SizedBox(
+      width: 24,
+      height: 24,
+      child: CustomPaint(
+        painter: _SavedFilesListPainter(color),
+      ),
+    );
+  }
+}
+
+class _SavedFilesListPainter extends CustomPainter {
+  const _SavedFilesListPainter(this.color);
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.7
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    canvas.save();
+    canvas.scale(size.width / 24, size.height / 24);
+
+    for (final y in <double>[6.5, 12, 17.5]) {
+      canvas.drawLine(
+        Offset(3.5, y),
+        Offset(y == 17.5 ? 8.5 : 12.5, y),
+        paint,
+      );
+    }
+
+    // 右侧书签：实心，宽 5.5，底部缺口按中线等分。
+    final bookmark = Path()
+      ..moveTo(15.5, 4.5)
+      ..lineTo(21, 4.5)
+      ..lineTo(21, 20)
+      ..lineTo(18.25, 17.8)
+      ..lineTo(15.5, 20)
+      ..close();
+    canvas.drawPath(
+      bookmark,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.fill,
+    );
+
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _SavedFilesListPainter oldDelegate) =>
+      oldDelegate.color != color;
+}
+
 class FileBrowserScreen extends ConsumerStatefulWidget {
   const FileBrowserScreen({super.key, this.initialPath, this.revealPath});
 
@@ -737,6 +804,9 @@ class _FileBrowserScreenState extends ConsumerState<FileBrowserScreen>
     with RouteAware {
   static const String _rootPath = '/storage/emulated/0';
   static const String _topPath = '/storage';
+
+  /// 底栏整块（含安全区）的尺寸，用来把「更多」菜单贴着底栏上沿弹出。
+  final GlobalKey _bottomBarKey = GlobalKey();
 
   static const EdgeInsets _dlgInset = EdgeInsets.all(4);
   static const EdgeInsets _dlgTitlePad =
@@ -3800,6 +3870,49 @@ Future<void> _showDirInfoDialog() async {
     );
   }
 
+  Future<void> _showConfigIoDialog() async {
+    final action = await showDialog<String>(
+      context: context,
+      builder: (c) => SimpleDialog(
+        title: const Text('导入/导出配置'),
+        children: [
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(c, 'export'),
+            child: const Padding(
+              padding: EdgeInsets.symmetric(vertical: 10),
+              child: Row(
+                children: [
+                  Icon(Icons.upload_file),
+                  SizedBox(width: 10),
+                  Text('导出配置'),
+                ],
+              ),
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(c, 'import'),
+            child: const Padding(
+              padding: EdgeInsets.symmetric(vertical: 10),
+              child: Row(
+                children: [
+                  Icon(Icons.download),
+                  SizedBox(width: 10),
+                  Text('导入配置'),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (action == 'export') {
+      await _exportConfig();
+    } else if (action == 'import') {
+      await _importConfig();
+    }
+  }
+
   Future<void> _showFavorites() async {
     final picked = await showDialog<String>(
       context: context,
@@ -5073,10 +5186,8 @@ String _normalizePath(String path) {
                   DirCache.instance.invalidate(_currentPath);
                   await _load();
                 }
-              case 'exportConfig':
-                await _exportConfig();
-              case 'importConfig':
-                await _importConfig();
+              case 'configIo':
+                await _showConfigIoDialog();
               case 'refresh':
                 DirCache.instance.invalidate(_currentPath);
                 await _load(skipCache: true, restoreScroll: true, silent: true);
@@ -5107,24 +5218,8 @@ String _normalizePath(String path) {
             ),
             const PopupMenuDivider(),
             const PopupMenuItem<String>(
-              value: 'exportConfig',
-              child: Row(
-                children: [
-                  Icon(Icons.upload_file),
-                  SizedBox(width: 10),
-                  Text('导出配置'),
-                ],
-              ),
-            ),
-            const PopupMenuItem<String>(
-              value: 'importConfig',
-              child: Row(
-                children: [
-                  Icon(Icons.download),
-                  SizedBox(width: 10),
-                  Text('导入配置'),
-                ],
-              ),
+              value: 'configIo',
+              child: Text('导入/导出配置'),
             ),
             const PopupMenuDivider(),
             const PopupMenuItem<String>(
@@ -5178,20 +5273,20 @@ const PopupMenuItem<String>(
             PopupMenuItem<String>(
               value: 'fileBookmarks',
               enabled: ref.read(fileBookmarksProvider).isNotEmpty,
-              child: Text(
-                '已收藏的文件 (${ref.read(fileBookmarksProvider).length})',
+              child: Row(
+                children: [
+                  const _SavedFilesListIcon(),
+                  const SizedBox(width: 10),
+                  Text(
+                    '已收藏的文件 (${ref.read(fileBookmarksProvider).length})',
+                  ),
+                ],
               ),
             ),
             const PopupMenuDivider(),
           const PopupMenuItem<String>(
             value: 'newFolder',
-            child: Row(
-              children: [
-                Icon(Icons.create_new_folder),
-                SizedBox(width: 10),
-                Text('新建文件夹'),
-              ],
-            ),
+            child: Text('新建文件夹'),
           ),
           ],
         ),
@@ -6493,6 +6588,7 @@ Widget _buildExpandedZipBar() {
     );
 
     return SafeArea(
+      key: _bottomBarKey,
       child: Container(
         decoration: BoxDecoration(
           color: s.surface,
@@ -6569,76 +6665,15 @@ child: Row(
     const SizedBox(width: 3),
     SizedBox(
       width: 40,
-      child: PopupMenuButton<String>(
-        tooltip: '更多操作',
-        padding: EdgeInsets.zero,
-        onSelected: (v) {
-          switch (v) {
-            case 'props':
-              if (!canProps) {
-                _toast('属性需要只选中 1 个文件');
-                return;
-              }
-              _showProperties();
-            case 'rename':
-              if (!canRename) {
-                _toast(_selectionHasZipInner
-                    ? '压缩包内的文件不支持重命名'
-                    : '重命名需要只选中 1 个文件');
-                return;
-              }
-              _rename();
-            case 'copy':
-              if (!canCopy) {
-                _toast(_selectionHasZipInner
-                    ? '压缩包内的文件不支持复制'
-                    : '请先选中文件');
-                return;
-              }
-              _copy();
-            case 'md5':
-              if (!canMd5) {
-                _toast('MD5 对比需要选中 2 个文件');
-                return;
-              }
-              _md5Compare();
-            case 'exportListing':
-              if (!canExportListing) {
-                _toast(_selectionHasZipInner
-                    ? '压缩包内的文件不支持导出清单'
-                    : '导出清单需要只选中 1 个文件');
-                return;
-              }
-              _exportFolderListing();
-          }
-        },
-        itemBuilder: (context) => [
-          _actionMenuItem(
-            value: 'props',
-            label: '属性',
-            enabled: canProps,
-          ),
-          _actionMenuItem(
-            value: 'rename',
-            label: '重命名',
-            enabled: canRename,
-          ),
-          _actionMenuItem(
-            value: 'copy',
-            label: '复制到',
-            enabled: canCopy,
-          ),
-          _actionMenuItem(
-            value: 'md5',
-            label: 'MD5对比',
-            enabled: canMd5,
-          ),
-          _actionMenuItem(
-            value: 'exportListing',
-            label: '导出清单',
-            enabled: canExportListing,
-          ),
-        ],
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: () => _showBottomActionMenu(
+          canProps: canProps,
+          canRename: canRename,
+          canCopy: canCopy,
+          canMd5: canMd5,
+          canExportListing: canExportListing,
+        ),
         child: Container(
           height: double.infinity,
           alignment: Alignment.center,
@@ -6688,7 +6723,7 @@ child: Row(
                 Expanded(
                   flex: 3,
                   child: _wideAction(
-                    icon: Icons.open_in_new,
+                    icon: Icons.tab,
                     label: openNewPageLabel,
                     onPressed: canOpenNewPage ? _openSelectedInNewPage : null,
                   ),
@@ -6699,6 +6734,129 @@ child: Row(
         ),
       ),
     );
+  }
+
+  /// 底栏「更多」菜单。
+  /// 不用 PopupMenuButton：它会把菜单压在底栏上弹出，还带进出场动画。
+  /// 这里让菜单贴着底栏上沿弹出，并且零动画。
+  Future<void> _showBottomActionMenu({
+    required bool canProps,
+    required bool canRename,
+    required bool canCopy,
+    required bool canMd5,
+    required bool canExportListing,
+  }) async {
+    final barBox =
+        _bottomBarKey.currentContext?.findRenderObject() as RenderBox?;
+    final barHeight =
+        (barBox != null && barBox.hasSize) ? barBox.size.height : 0.0;
+
+    final value = await Navigator.of(context).push<String>(
+      PageRouteBuilder<String>(
+        opaque: false,
+        barrierColor: Colors.transparent,
+        barrierDismissible: true,
+        barrierLabel: '关闭菜单',
+        transitionDuration: Duration.zero,
+        reverseTransitionDuration: Duration.zero,
+        pageBuilder: (ctx, _, __) => Stack(
+          children: [
+            Positioned(
+              right: 8,
+              bottom: barHeight + 8,
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.sizeOf(ctx).height - barHeight - 24,
+                ),
+                child: SingleChildScrollView(
+                  child: Material(
+                    elevation: 8,
+                    borderRadius: BorderRadius.circular(6),
+                    clipBehavior: Clip.antiAlias,
+                    color: Theme.of(ctx).colorScheme.surface,
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(minWidth: 160),
+                      child: IntrinsicWidth(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _actionMenuItem(
+                              value: 'props',
+                              label: '属性',
+                              enabled: canProps,
+                            ),
+                            _actionMenuItem(
+                              value: 'rename',
+                              label: '重命名',
+                              enabled: canRename,
+                            ),
+                            _actionMenuItem(
+                              value: 'copy',
+                              label: '复制到',
+                              enabled: canCopy,
+                            ),
+                            _actionMenuItem(
+                              value: 'md5',
+                              label: 'MD5对比',
+                              enabled: canMd5,
+                            ),
+                            _actionMenuItem(
+                              value: 'exportListing',
+                              label: '导出清单',
+                              enabled: canExportListing,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || value == null) return;
+    switch (value) {
+      case 'props':
+        if (!canProps) {
+          _toast('属性需要只选中 1 个文件');
+          return;
+        }
+        await _showProperties();
+      case 'rename':
+        if (!canRename) {
+          _toast(_selectionHasZipInner
+              ? '压缩包内的文件不支持重命名'
+              : '重命名需要只选中 1 个文件');
+          return;
+        }
+        await _rename();
+      case 'copy':
+        if (!canCopy) {
+          _toast(_selectionHasZipInner
+              ? '压缩包内的文件不支持复制'
+              : '请先选中文件');
+          return;
+        }
+        await _copy();
+      case 'md5':
+        if (!canMd5) {
+          _toast('MD5 对比需要选中 2 个文件');
+          return;
+        }
+        await _md5Compare();
+      case 'exportListing':
+        if (!canExportListing) {
+          _toast(_selectionHasZipInner
+              ? '压缩包内的文件不支持导出清单'
+              : '导出清单需要只选中 1 个文件');
+          return;
+        }
+        await _exportFolderListing();
+    }
   }
 
   Widget _wideAction({
