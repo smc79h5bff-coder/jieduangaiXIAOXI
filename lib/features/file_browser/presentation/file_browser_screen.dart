@@ -4920,67 +4920,77 @@ String _normalizePath(String path) {
           ? (isDark ? Colors.grey.shade900 : Colors.grey.shade200)
           : null,
       surfaceTintColor: Colors.transparent,
-      title: persistentMarker
-          ? GestureDetector(
-              onTap: () => setState(() => _markerMode = _MarkerMode.off),
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFD9E6EE),
-                  borderRadius: BorderRadius.circular(18),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.2),
-                      blurRadius: 8,
-                      offset: const Offset(0, 3),
-                    ),
-                  ],
-                ),
-                child: const Text(
-                  '退出标记',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.black,
-                  ),
-                ),
-              ),
-            )
-          : singleShotMarker
+      title: isChildPage
+          ? null
+          : persistentMarker
               ? GestureDetector(
                   onTap: () => setState(() => _markerMode = _MarkerMode.off),
                   child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 1, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 6),
                     decoration: BoxDecoration(
-                      color: Colors.transparent,
+                      color: const Color(0xFFD9E6EE),
                       borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: Colors.black, width: 1),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.2),
+                          blurRadius: 8,
+                          offset: const Offset(0, 3),
+                        ),
+                      ],
                     ),
                     child: const Text(
-                      '单击即标记',
-                      maxLines: 1,
-                      softWrap: false,
+                      '退出标记',
                       style: TextStyle(
-                        fontSize: 11,
+                        fontSize: 13,
                         fontWeight: FontWeight.w600,
                         color: Colors.black,
                       ),
                     ),
                   ),
                 )
-              : GestureDetector(
-                  onLongPress: _showJumpToPathDialog,
-                  child: Text(
-                    (_searchActive &&
-                            ref.watch(searchScopeProvider) ==
-                                SearchScope.custom)
-                        ? '自定义的搜索范围'
-                        : _title,
-                    style: const TextStyle(fontSize: 14),
-                  ),
-                ),
+              : singleShotMarker
+                  ? GestureDetector(
+                      onTap: () =>
+                          setState(() => _markerMode = _MarkerMode.off),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 1, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.transparent,
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(color: Colors.black, width: 1),
+                        ),
+                        child: const Text(
+                          '单击即标记',
+                          maxLines: 1,
+                          softWrap: false,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.black,
+                          ),
+                        ),
+                      ),
+                    )
+                  : GestureDetector(
+                      onLongPress: _showJumpToPathDialog,
+                      child: Text(
+                        (_searchActive &&
+                                ref.watch(searchScopeProvider) ==
+                                    SearchScope.custom)
+                            ? '自定义的搜索范围'
+                            : _title,
+                        style: const TextStyle(fontSize: 14),
+                      ),
+                    ),
+      flexibleSpace: isChildPage
+          ? Center(
+              child: _ChildPageCloseButton(
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            )
+          : null,
       leading: _searchActive
           ? IconButton(
               icon: const Icon(Icons.arrow_back),
@@ -4997,13 +5007,6 @@ String _normalizePath(String path) {
                       ? _smallBackButton(onPressed: _goUp)
                       : null))),
       actions: [
-        // 子页面右上角的关闭按钮：直接 pop 本页，不受返回键的多层拦截影响。
-        if (isChildPage)
-          IconButton(
-            icon: const Icon(Icons.close),
-            tooltip: '关闭此页面',
-            onPressed: () => Navigator.of(context).pop(),
-          ),
         // ========== 搜索框收起/显示 ==========
         if (!_searchActive && !_forceShowSearchBar)
           IconButton(
@@ -5054,43 +5057,43 @@ String _normalizePath(String path) {
           
           
           onSelected: (v) async {
-  switch (v) {
-    case 'toggleFavorite':
-      _toggleFavorite();
-    case 'browserSettings':
-      final beforeField = ref.read(sortFieldProvider);
-      final beforeAsc = ref.read(sortAscProvider);
-      await Navigator.of(context).push(_noAnimRoute(
-        const BrowserSettingsScreen(),
-      ));
-      if (!mounted) return;
-      final afterField = ref.read(sortFieldProvider);
-      final afterAsc = ref.read(sortAscProvider);
-      if (beforeField != afterField || beforeAsc != afterAsc) {
-        DirCache.instance.invalidate(_currentPath);
-        _load();
-      }
-    case 'exportConfig':
-      _exportConfig();
-    case 'importConfig':
-      _importConfig();
-   case 'refresh':
-  DirCache.instance.invalidate(_currentPath);
-  _load(skipCache: true, restoreScroll: true, silent: true);
-case 'jumpToPath':
-  _showJumpToPathDialog();
-case 'jumpToTop':
-  _jumpToTop();
-case 'dirInfo':
-  _showDirInfoDialog();
-case 'favorites':
-  _showFavorites();
-case 'fileBookmarks':
-  _showFileBookmarks();
-    case 'newFolder':
-      _newFolder();
-  }
-},
+            switch (v) {
+              case 'toggleFavorite':
+                _toggleFavorite();
+              case 'browserSettings':
+                final beforeField = ref.read(sortFieldProvider);
+                final beforeAsc = ref.read(sortAscProvider);
+                await Navigator.of(context).push(_noAnimRoute(
+                  const BrowserSettingsScreen(),
+                ));
+                if (!mounted) return;
+                final afterField = ref.read(sortFieldProvider);
+                final afterAsc = ref.read(sortAscProvider);
+                if (beforeField != afterField || beforeAsc != afterAsc) {
+                  DirCache.instance.invalidate(_currentPath);
+                  await _load();
+                }
+              case 'exportConfig':
+                await _exportConfig();
+              case 'importConfig':
+                await _importConfig();
+              case 'refresh':
+                DirCache.instance.invalidate(_currentPath);
+                await _load(skipCache: true, restoreScroll: true, silent: true);
+              case 'jumpToPath':
+                await _showJumpToPathDialog();
+              case 'jumpToTop':
+                _jumpToTop();
+              case 'dirInfo':
+                await _showDirInfoDialog();
+              case 'favorites':
+                await _showFavorites();
+              case 'fileBookmarks':
+                await _showFileBookmarks();
+              case 'newFolder':
+                await _newFolder();
+            }
+          },
           itemBuilder: (context) => [
             const PopupMenuItem<String>(
               value: 'browserSettings',
@@ -5173,11 +5176,13 @@ const PopupMenuItem<String>(
             ),
             const PopupMenuDivider(),
             PopupMenuItem<String>(
-            value: 'fileBookmarks',
-            child: Text(
-                '已收藏的文件 (${ref.read(fileBookmarksProvider).length})'),
-          ),
-          const PopupMenuDivider(),
+              value: 'fileBookmarks',
+              enabled: ref.read(fileBookmarksProvider).isNotEmpty,
+              child: Text(
+                '已收藏的文件 (${ref.read(fileBookmarksProvider).length})',
+              ),
+            ),
+            const PopupMenuDivider(),
           const PopupMenuItem<String>(
             value: 'newFolder',
             child: Row(
@@ -6434,6 +6439,24 @@ Widget _buildExpandedZipBar() {
     return false;
   }
 
+  /// 底部「更多」菜单项。
+  /// 不可用时文字置灰，但条目仍可点击：点击后菜单照常关闭，
+  /// 由 onSelected toast 说明原因，避免出现“点了没反应、菜单也不关”。
+  PopupMenuItem<String> _actionMenuItem({
+    required String value,
+    required String label,
+    required bool enabled,
+  }) {
+    return PopupMenuItem<String>(
+      value: value,
+      height: 56,
+      child: Opacity(
+        opacity: enabled ? 1 : 0.38,
+        child: Text(label),
+      ),
+    );
+  }
+
   Widget _buildBottomBar() {
     final n = _selectedPaths.length;
     final canCompare = n == 2;
@@ -6552,47 +6575,68 @@ child: Row(
         onSelected: (v) {
           switch (v) {
             case 'props':
+              if (!canProps) {
+                _toast('属性需要只选中 1 个文件');
+                return;
+              }
               _showProperties();
             case 'rename':
+              if (!canRename) {
+                _toast(_selectionHasZipInner
+                    ? '压缩包内的文件不支持重命名'
+                    : '重命名需要只选中 1 个文件');
+                return;
+              }
               _rename();
             case 'copy':
+              if (!canCopy) {
+                _toast(_selectionHasZipInner
+                    ? '压缩包内的文件不支持复制'
+                    : '请先选中文件');
+                return;
+              }
               _copy();
             case 'md5':
+              if (!canMd5) {
+                _toast('MD5 对比需要选中 2 个文件');
+                return;
+              }
               _md5Compare();
             case 'exportListing':
+              if (!canExportListing) {
+                _toast(_selectionHasZipInner
+                    ? '压缩包内的文件不支持导出清单'
+                    : '导出清单需要只选中 1 个文件');
+                return;
+              }
               _exportFolderListing();
           }
         },
         itemBuilder: (context) => [
-          PopupMenuItem<String>(
+          _actionMenuItem(
             value: 'props',
-            height: 56,
+            label: '属性',
             enabled: canProps,
-            child: const Text('属性'),
           ),
-          PopupMenuItem<String>(
+          _actionMenuItem(
             value: 'rename',
-            height: 56,
+            label: '重命名',
             enabled: canRename,
-            child: const Text('重命名'),
           ),
-          PopupMenuItem<String>(
+          _actionMenuItem(
             value: 'copy',
-            height: 56,
+            label: '复制到',
             enabled: canCopy,
-            child: const Text('复制到'),
           ),
-          PopupMenuItem<String>(
+          _actionMenuItem(
             value: 'md5',
-            height: 56,
+            label: 'MD5对比',
             enabled: canMd5,
-            child: const Text('MD5对比'),
           ),
-          PopupMenuItem<String>(
+          _actionMenuItem(
             value: 'exportListing',
-            height: 56,
+            label: '导出清单',
             enabled: canExportListing,
-            child: const Text('导出清单'),
           ),
         ],
         child: Container(
@@ -9097,9 +9141,9 @@ class _FileBookmarksDialogState
                 itemBuilder: (ctx, i) {
                   final p = bookmarks[i];
                   final name = p.split('/').last;
-                  final exists =
-                      FileSystemEntity.typeSync(p) !=
-                          FileSystemEntityType.notFound;
+                  final type = FileSystemEntity.typeSync(p);
+                  final exists = type != FileSystemEntityType.notFound;
+                  final isDir = type == FileSystemEntityType.directory;
                   Widget? subtitle;
                   switch (mode) {
                     case BrowserBookmarkDisplayMode.filenameOnly:
@@ -9118,9 +9162,17 @@ class _FileBookmarksDialogState
                       );
                   }
                   final selected = _selected.contains(p);
+                  final Widget bookmarkTypeIcon = !exists
+                      ? const Icon(Icons.help_outline,
+                          size: 20, color: Colors.grey)
+                      : isDir
+                          ? Icon(Icons.folder,
+                              size: 20, color: Colors.amber.shade600)
+                          : Icon(Icons.insert_drive_file_outlined,
+                              size: 20, color: Colors.blue.shade600);
                   return ListTile(
                     dense: true,
-                    minLeadingWidth: 0,
+                    minLeadingWidth: _selectionMode ? 0 : 24,
                     minVerticalPadding: 2,
                     contentPadding: EdgeInsets.zero,
                     leading: _selectionMode
@@ -9129,7 +9181,7 @@ class _FileBookmarksDialogState
                             onChanged: (_) => _toggleSelect(p),
                             visualDensity: VisualDensity.compact,
                           )
-                        : null,
+                        : bookmarkTypeIcon,
                     title: Text(
                       name,
                       style: TextStyle(
@@ -9683,6 +9735,80 @@ class _DeleteConfirmDialogState extends State<_DeleteConfirmDialog> {
       ],
     );
   }
+}
+
+// ==================== 子页面关闭按钮 ====================
+
+/// 子页面顶栏中央的实心方叉。
+/// 点击区域 160×44，远大于 30×30 的图标，手指好按。
+class _ChildPageCloseButton extends StatelessWidget {
+  const _ChildPageCloseButton({required this.onPressed});
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onPressed,
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        constraints: const BoxConstraints(minWidth: 160, minHeight: 44),
+        alignment: Alignment.center,
+        child: const _SquareXIcon(size: 30, color: Colors.black),
+      ),
+    );
+  }
+}
+
+/// 黑色圆角实心方 + 白色叉。
+class _SquareXIcon extends StatelessWidget {
+  const _SquareXIcon({this.size = 28, this.color = Colors.black});
+  final double size;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: CustomPaint(painter: _SquareXPainter(color: color)),
+    );
+  }
+}
+
+class _SquareXPainter extends CustomPainter {
+  _SquareXPainter({required this.color});
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final radius = size.width * 0.18;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(0, 0, size.width, size.height),
+        Radius.circular(radius),
+      ),
+      Paint()..color = color,
+    );
+    final xPaint = Paint()
+      ..color = Colors.white
+      ..strokeWidth = size.width * 0.16
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+    final inset = size.width * 0.30;
+    canvas.drawLine(
+      Offset(inset, inset),
+      Offset(size.width - inset, size.height - inset),
+      xPaint,
+    );
+    canvas.drawLine(
+      Offset(size.width - inset, inset),
+      Offset(inset, size.height - inset),
+      xPaint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _SquareXPainter old) => old.color != color;
 }
 
 /// 收藏按钮：空心纸 + 右上角三角护套 + 左上角实心钻石（单态不变）。
