@@ -1082,36 +1082,33 @@ class _LineByLineEditorPageState extends ConsumerState<LineByLineEditorPage> {
     final enabled = onTap != null || onLongPress != null;
     final s = Theme.of(context).colorScheme;
     final color = enabled ? s.onSurface : s.onSurface.withOpacity(0.3);
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        onLongPress: onLongPress,
-        onLongPressEnd: onLongPressEnd == null
-            ? null
-            : (_) => onLongPressEnd(),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
-          child: Row(
-            mainAxisSize: MainAxisSize.max,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, size: 18, color: color),
-              const SizedBox(width: 3),
-              Flexible(
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 11,
-                    color: color,
-                    fontWeight: FontWeight.w600,
-                  ),
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      onLongPress: onLongPress,
+      onLongPressEnd:
+          onLongPressEnd == null ? null : (_) => onLongPressEnd(),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
+        child: Row(
+          mainAxisSize: MainAxisSize.max,
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 18, color: color),
+            const SizedBox(width: 3),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: color,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
