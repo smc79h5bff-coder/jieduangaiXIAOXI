@@ -7684,13 +7684,16 @@ return _wrapWithFlash(
               child: Align(
                 alignment: Alignment.topCenter,
            
-				  
+
+
+
 				  child: Icon(
-  item.isZip
-      ? Icons.folder_zip
-      : (item.isDir
-          ? Icons.folder
+  item.isDir
+      ? Icons.folder
+      : (item.isZip
+          ? Icons.folder_zip
           : Icons.insert_drive_file_outlined),
+  
   size: 28,
   color: isZipInner
       ? Colors.blueGrey.shade300
