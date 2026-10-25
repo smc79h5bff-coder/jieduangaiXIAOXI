@@ -148,7 +148,14 @@ Future<Uint8List> _folderListingWorker(String rootPath) async {
 }
 
 class FileBrowserScreen extends ConsumerStatefulWidget {
-  const FileBrowserScreen({super.key});
+  const FileBrowserScreen({super.key, this.initialPath, this.revealPath});
+
+  /// 以子页面方式打开时的起始目录。
+  /// 为 null 表示主页面：沿用上次浏览目录，并继续写回该记录。
+  final String? initialPath;
+
+  /// 打开后需要定位的文件路径（仅子页面使用）：滚动到该文件并短暂高亮。
+  final String? revealPath;
 
   @override
   ConsumerState<FileBrowserScreen> createState() => _FileBrowserScreenState();
@@ -901,10 +908,12 @@ int _expandedDecodedBytes = 0;
 void initState() {
   super.initState();
   // 清掉上次会话遗留的 zip 内临时文件。
-  // 不 await：后台跑，不阻塞启动。
-  _cleanTempDirOnce();
-  final saved = ref.read(lastPathProvider);
+  // 不 await：后台跑，不阻塞启动。子页面不重复清理，避免误删主页面正在用的临时文件。
+  if (widget.initialPath == null) _cleanTempDirOnce();
+  final saved = widget.initialPath ?? ref.read(lastPathProvider);
   _currentPath = _resolveInitialPath(saved);
+  // 子页面要定位的文件：交给已有的「跳转待办」机制，加载完成后滚动并高亮。
+  _pendingJumpPath = widget.revealPath;
   _positionsListener.itemPositions.addListener(_onPositionsChanged);
   _load();
 }
@@ -931,8 +940,8 @@ Future<void> _cleanTempDirOnce() async {
   } catch (_) {}
 }
 
-  String _resolveInitialPath(String saved) {
-    if (saved.isEmpty) return _rootPath;
+  String _resolveInitialPath(String? saved) {
+    if (saved == null || saved.isEmpty) return _rootPath;
     if (!saved.startsWith(_topPath)) return _rootPath;
     if (!Directory(saved).existsSync()) return _rootPath;
     return saved;
@@ -1435,7 +1444,10 @@ _filterDeepResults = const [];
 _searchTaskId++;
 _expandedZipKeys.clear();
     _stickyZipKey = null;
-    ref.read(lastPathProvider.notifier).update(path);
+    // 只有主页面记住浏览位置；子页面的导航不应覆盖主页面「上次目录」。
+    if (widget.initialPath == null) {
+      ref.read(lastPathProvider.notifier).update(path);
+    }
     setState(() {
       _currentPath = path;
       _searchResults = [];
@@ -1715,6 +1727,45 @@ Widget _buildAdvancedToggle() {
       _selectedPaths.clear();
       _anchorPath = null;
     });
+  }
+
+  /// 把当前唯一选中的条目压入一个新页面，本页现场（搜索/滚动/多选）保持不变。
+  /// 文件夹以自身为起点；文件以所在目录为起点，并定位到该文件。
+  Future<void> _openSelectedInNewPage() async {
+    if (_selectedPaths.length != 1) return;
+    final path = _selectedPaths.first;
+    final type = FileSystemEntity.typeSync(path);
+    final isDir = type == FileSystemEntityType.directory;
+    if (!isDir && type != FileSystemEntityType.file) {
+      _toast('无法打开这个条目');
+      return;
+    }
+    final targetDir =
+        isDir || !path.contains('/') ? path : path.substring(0, path.lastIndexOf('/'));
+    _clearSelection();
+    await _pushChildPage(targetDir, revealPath: isDir ? null : path);
+  }
+
+  /// 搜索态点面包屑：压子页并把搜索现场留给当前页；普通浏览仍同页跳转。
+  void _openBreadcrumb(String path) {
+    if (_searchActive) {
+      _pushChildPage(path);
+    } else {
+      _navigateTo(path);
+    }
+  }
+
+  /// 压入以 [path] 为起点的子页面；返回后校正本页可能已失效的状态。
+  Future<void> _pushChildPage(String path, {String? revealPath}) async {
+    await Navigator.of(context).push(
+      _noAnimRoute(
+        FileBrowserScreen(initialPath: path, revealPath: revealPath),
+      ),
+    );
+    if (!mounted) return;
+    // 子页面里可能删/移过文件：剔除失效的搜索结果，并让当前目录重新取一次缓存。
+    setState(_pruneSearchResults);
+    if (!_searchActive) _load();
   }
 
   void _pruneSearchResults() {
@@ -4666,7 +4717,7 @@ String _normalizePath(String path) {
         GestureDetector(
           onTap: (_selectionMode || isLast)
               ? null
-              : () => _navigateTo(c.path),
+              : () => _openBreadcrumb(c.path),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
             child: Text(
@@ -4860,7 +4911,15 @@ String _normalizePath(String path) {
     // 可点击的退出按钮。中途中止可再点一次画笔图标或按系统返回键。
     final persistentMarker = _markerMode == _MarkerMode.alwaysOn;
     final singleShotMarker = _markerMode == _MarkerMode.exitAfterMark;
+    final isChildPage = widget.initialPath != null;
+    // 新页面统一用中性灰顶栏，和原页面区分；不跟随各套皮肤的彩色表面色。
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     return AppBar(
+      automaticallyImplyLeading: false, // 左侧按钮完全自绘，避免存储根冒出自动返回键
+      backgroundColor: isChildPage
+          ? (isDark ? Colors.grey.shade900 : Colors.grey.shade200)
+          : null,
+      surfaceTintColor: Colors.transparent,
       title: persistentMarker
           ? GestureDetector(
               onTap: () => setState(() => _markerMode = _MarkerMode.off),
@@ -4927,14 +4986,24 @@ String _normalizePath(String path) {
               icon: const Icon(Icons.arrow_back),
               onPressed: _clearSearch,
             )
-          : (_currentPath == _topPath
-              ? _smallBackButton(
-                  onPressed: () => _navigateTo(_rootPath),
-                )
-              : (_canGoUp
-                  ? _smallBackButton(onPressed: _goUp)
-                  : null)),
+          : (isChildPage
+              // 子页面：上一级一直可用，直到存储根（与主页面同规则）。
+              ? (_canGoUp ? _smallBackButton(onPressed: _goUp) : null)
+              : (_currentPath == _topPath
+                  ? _smallBackButton(
+                      onPressed: () => _navigateTo(_rootPath),
+                    )
+                  : (_canGoUp
+                      ? _smallBackButton(onPressed: _goUp)
+                      : null))),
       actions: [
+        // 子页面右上角的关闭按钮：直接 pop 本页，不受返回键的多层拦截影响。
+        if (isChildPage)
+          IconButton(
+            icon: const Icon(Icons.close),
+            tooltip: '关闭此页面',
+            onPressed: () => Navigator.of(context).pop(),
+          ),
         // ========== 搜索框收起/显示 ==========
         if (!_searchActive && !_forceShowSearchBar)
           IconButton(
@@ -6381,6 +6450,11 @@ Widget _buildExpandedZipBar() {
     final canDelete = n >= 1 && allDisk;
     final canExportListing = n == 1 && allDisk;
 
+    final selItems = n == 1 ? _resolveSelectedItems() : const <_DisplayItem>[];
+    final canOpenNewPage = n == 1 && allDisk;
+    final openNewPageLabel =
+        selItems.length == 1 && !selItems.first.isDir ? '定位到新页面' : '在新页面打开';
+
     final s = Theme.of(context).colorScheme;
 
     final outlineStyle = FilledButton.styleFrom(
@@ -6429,7 +6503,7 @@ child: Row(
     ),
     const SizedBox(width: 4),
     SizedBox(
-      width: 68,
+      width: 70,
       child: FilledButton(
         style: outlineStyle,
         onPressed: canCopyPath ? _copyPath : null,
@@ -6443,7 +6517,7 @@ child: Row(
     ),
     const SizedBox(width: 3),
     SizedBox(
-      width: 68,
+      width: 70,
       child: FilledButton(
         style: outlineStyle,
         onPressed: canOpenWith ? _openWithApp : null,
@@ -6457,7 +6531,7 @@ child: Row(
     ),
     const SizedBox(width: 3),
     SizedBox(
-      width: 68,
+      width: 70,
       child: FilledButton(
         style: outlineStyle,
         onPressed: canShare ? _shareSelected : null,
@@ -6471,44 +6545,68 @@ child: Row(
     ),
     const SizedBox(width: 3),
     SizedBox(
-      width: 68,
-      child: FilledButton(
-        style: outlineStyle,
-        onPressed: _bookmarkSelected,
-        child: const Text(
-          '收藏',
-          style: labelStyle,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-      ),
-    ),
-    const SizedBox(width: 3),
-    SizedBox(
-      width: 68,
-      child: FilledButton(
-        style: outlineStyle,
-        onPressed: canMd5 ? _md5Compare : null,
-        child: const Text(
-          'MD5对比',
-          style: labelStyle,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-      ),
-    ),
-    const SizedBox(width: 3),
-    SizedBox(
-      width: 68,
-      child: FilledButton(
-        style: outlineStyle,
-        onPressed:
-            canExportListing ? _exportFolderListing : null,
-        child: const Text(
-          '导出清单',
-          style: labelStyle,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
+      width: 40,
+      child: PopupMenuButton<String>(
+        tooltip: '更多操作',
+        padding: EdgeInsets.zero,
+        onSelected: (v) {
+          switch (v) {
+            case 'props':
+              _showProperties();
+            case 'rename':
+              _rename();
+            case 'copy':
+              _copy();
+            case 'md5':
+              _md5Compare();
+            case 'exportListing':
+              _exportFolderListing();
+          }
+        },
+        itemBuilder: (context) => [
+          PopupMenuItem<String>(
+            value: 'props',
+            height: 56,
+            enabled: canProps,
+            child: const Text('属性'),
+          ),
+          PopupMenuItem<String>(
+            value: 'rename',
+            height: 56,
+            enabled: canRename,
+            child: const Text('重命名'),
+          ),
+          PopupMenuItem<String>(
+            value: 'copy',
+            height: 56,
+            enabled: canCopy,
+            child: const Text('复制到'),
+          ),
+          PopupMenuItem<String>(
+            value: 'md5',
+            height: 56,
+            enabled: canMd5,
+            child: const Text('MD5对比'),
+          ),
+          PopupMenuItem<String>(
+            value: 'exportListing',
+            height: 56,
+            enabled: canExportListing,
+            child: const Text('导出清单'),
+          ),
+        ],
+        child: Container(
+          height: double.infinity,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            border: Border.all(color: s.primary),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: const Icon(
+            Icons.more_horiz,
+            size: 20,
+            color: Colors.black,
+          ),
         ),
       ),
     ),
@@ -6520,38 +6618,35 @@ child: Row(
             Row(
               children: [
                 Expanded(
-                  child: _wideAction(
-                    icon: Icons.info_outline,
-                    label: '属性',
-                    onPressed: canProps ? _showProperties : null,
-                  ),
-                ),
-                Expanded(
-                  child: _wideAction(
-                    icon: Icons.drive_file_rename_outline,
-                    label: '重命名',
-                    onPressed: canRename ? _rename : null,
-                  ),
-                ),
-                Expanded(
+                  flex: 2,
                   child: _wideAction(
                     icon: Icons.drive_file_move_outline,
-                    label: '移动',
+                    label: '移动到',
                     onPressed: canMove ? _move : null,
                   ),
                 ),
                 Expanded(
-                  child: _wideAction(
-                    icon: Icons.copy_all_outlined,
-                    label: '复制',
-                    onPressed: canCopy ? _copy : null,
-                  ),
-                ),
-                Expanded(
+                  flex: 2,
                   child: _wideAction(
                     icon: Icons.delete_outline,
                     label: '删除',
                     onPressed: canDelete ? _delete : null,
+                  ),
+                ),
+                Expanded(
+                  flex: 2,
+                  child: _wideAction(
+                    icon: Icons.bookmark_add_outlined,
+                    label: '收藏选中',
+                    onPressed: _bookmarkSelected,
+                  ),
+                ),
+                Expanded(
+                  flex: 3,
+                  child: _wideAction(
+                    icon: Icons.open_in_new,
+                    label: openNewPageLabel,
+                    onPressed: canOpenNewPage ? _openSelectedInNewPage : null,
                   ),
                 ),
               ],
