@@ -30,6 +30,24 @@ class DefaultViewModeNotifier extends EnumPrefNotifier<ViewMode> {
         );
 }
 
+/// 批处理（行清单）打开时使用哪个编辑器。
+/// text = 旧的整段文本编辑器；line = 新的逐行编辑器。
+enum LineListEditorMode { text, line }
+
+final lineListEditorModeProvider =
+    NotifierProvider<LineListEditorModeNotifier, LineListEditorMode>(
+  LineListEditorModeNotifier.new,
+);
+
+class LineListEditorModeNotifier extends EnumPrefNotifier<LineListEditorMode> {
+  LineListEditorModeNotifier()
+      : super(
+          key: PrefKeys.lineListEditorMode,
+          values: LineListEditorMode.values,
+          initial: LineListEditorMode.text,
+        );
+}
+
 final showPerfOverlayProvider = StateProvider<bool>((ref) => false);
 
 final noWrapProvider = StateProvider<bool>((ref) => false);
