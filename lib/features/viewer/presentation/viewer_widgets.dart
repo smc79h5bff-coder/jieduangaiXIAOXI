@@ -330,6 +330,10 @@ class DisplaySettingsSheet extends ConsumerWidget {
                                   value: LineListEditorMode.line,
                                   label: Text('行编辑器'),
                                 ),
+                                ButtonSegment(
+                                  value: LineListEditorMode.linePainter,
+                                  label: Text('行编辑器3'),
+                                ),
                               ],
                               selected: {mode},
                               onSelectionChanged: (sel) => ref
@@ -339,7 +343,8 @@ class DisplaySettingsSheet extends ConsumerWidget {
                             const SizedBox(height: 4),
                             Text(
                               '决定对比页顶栏「批左 / 批右」和查找面板的批处理按钮打开哪个编辑器。'
-                              '行编辑器每行独立，绝不折行，行号永远对齐。',
+                              '行编辑器每行独立，绝不折行；行编辑器3 是试验版，'
+                              '行号栏在绘制阶段跟随滚动（应能彻底消除删行后的错位）。',
                               style: TextStyle(
                                 fontSize: 11,
                                 color:
