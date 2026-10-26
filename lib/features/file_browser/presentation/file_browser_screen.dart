@@ -1126,39 +1126,35 @@ void dispose() {
     final out = <_DisplayItem>[];
 
     if (_searchActive) {
-      for (final hit in _searchResults) {
-        final isZip = _isExpandableArchiveName(hit.name);
-		  // 原来：
-
-// 改成：
-final isZip = !hit.isDir && _isExpandableArchiveName(hit.name);
-        final key = hit.path;
-       out.add(_DisplayItem(
-  key: key,
-  displayName: hit.name,
-  depth: 0,
-  isDir: hit.isDir,    // ★ 加这行
-  isZip: isZip,
-  size: hit.size,
-  modified: hit.modified,
-  searchHit: hit,
-));
-        if (isZip && _expandedZipKeys.contains(key)) {
-          _appendZipChildren(
-            out: out,
-            zipDiskPath: key,
-            zipArchive: _zipArchives[key],
-            at: '',
-            innerPrefix: '',
-            parentOwnerKey: null,
-            depth: 1,
-            error: _zipErrors[key],
-            loading: _loadingZipKeys.contains(key),
-          );
-        }
-      }
-      return out;
+  for (final hit in _searchResults) {
+    final isZip = !hit.isDir && _isExpandableArchiveName(hit.name);
+    final key = hit.path;
+    out.add(_DisplayItem(
+      key: key,
+      displayName: hit.name,
+      depth: 0,
+      isDir: hit.isDir,
+      isZip: isZip,
+      size: hit.size,
+      modified: hit.modified,
+      searchHit: hit,
+    ));
+    if (isZip && _expandedZipKeys.contains(key)) {
+      _appendZipChildren(
+        out: out,
+        zipDiskPath: key,
+        zipArchive: _zipArchives[key],
+        at: '',
+        innerPrefix: '',
+        parentOwnerKey: null,
+        depth: 1,
+        error: _zipErrors[key],
+        loading: _loadingZipKeys.contains(key),
+      );
     }
+  }
+  return out;
+}
 
     final entries = _entries ?? const <EntryInfo>[];
     for (final info in entries) {
